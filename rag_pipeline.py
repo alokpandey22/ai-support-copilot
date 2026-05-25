@@ -40,7 +40,7 @@ if not _api_key:
 client = genai.Client(api_key=_api_key)
 
 # ── Model config ───────────────────────────────────────────────────────────────
-MODEL_NAME = "models/gemini-1.5-flash-latest"
+MODEL_NAME = "gemini-2.0-flash"
 
 # ── Embedding model (downloaded once, cached by sentence-transformers) ─────────
 _embeddings = None
