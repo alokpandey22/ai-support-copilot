@@ -1,12 +1,12 @@
 """
 rag_pipeline.py
 ───────────────
-Core RAG (Retrieval-Augmented Generation) pipeline for AI Support Copilot.
-Handles document loading, chunking, vector-store creation, retrieval, query
-reformulation, and answer generation using Gemini 1.5 Flash.
+Core RAG pipeline for AI Support Copilot.
+Rate-limit safe: reduced chunk sizes, context limits, pacing delays.
 """
 
 import os
+import time
 from collections import defaultdict
 
 from langchain_community.document_loaders import PyPDFLoader
@@ -19,10 +19,8 @@ from dotenv import load_dotenv
 # ── Load environment variables ─────────────────────────────────────────────────
 load_dotenv()
 
-# ── Gemini client (API key loaded from .env or Streamlit secrets) ──────────────
+# ── Gemini client ──────────────────────────────────────────────────────────────
 _api_key = os.getenv("GEMINI_API_KEY")
-
-# Fall back to Streamlit secrets when running on Streamlit Cloud
 if not _api_key:
     try:
         import streamlit as _st
@@ -39,42 +37,33 @@ if not _api_key:
 
 client = genai.Client(api_key=_api_key)
 
-# ── Model config ───────────────────────────────────────────────────────────────
+# ── Model ──────────────────────────────────────────────────────────────────────
 MODEL_NAME = "gemini-2.0-flash"
 
-# ── Embedding model (downloaded once, cached by sentence-transformers) ─────────
+# ── Embeddings (lazy-loaded) ───────────────────────────────────────────────────
 _embeddings = None
 
-
 def _get_embeddings():
-    """Lazy-load embeddings so startup is fast."""
     global _embeddings
     if _embeddings is None:
         _embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return _embeddings
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Document loading & chunking
-# ──────────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  Document loading & chunking
+# ══════════════════════════════════════════════════════════════════════════════
 
 def load_docs(file_path: str):
-    """Load a PDF and return a list of LangChain Document objects."""
+    """Load a PDF and return LangChain Document objects."""
     loader = PyPDFLoader(file_path)
     return loader.load()
 
 
-def chunk_docs(docs, chunk_size: int = 1200, chunk_overlap: int = 200):
+def chunk_docs(docs, chunk_size: int = 600, chunk_overlap: int = 100):
     """
-    Split documents into overlapping chunks for retrieval.
-
-    Args:
-        docs:          List of LangChain Document objects.
-        chunk_size:    Target characters per chunk.
-        chunk_overlap: Characters shared between adjacent chunks (context bridge).
-
-    Returns:
-        List of chunked Document objects.
+    Split documents into overlapping chunks.
+    FIX: Reduced chunk_size 1200→600 and overlap 200→100 to cut TPM by ~50%.
     """
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
@@ -83,77 +72,48 @@ def chunk_docs(docs, chunk_size: int = 1200, chunk_overlap: int = 200):
     return splitter.split_documents(docs)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Vector store
-# ──────────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  Vector store
+# ══════════════════════════════════════════════════════════════════════════════
 
 def create_vector_store(chunks):
-    """
-    Build a FAISS vector store from a list of document chunks.
-
-    Raises:
-        ValueError: If chunks is empty (nothing to embed).
-    """
+    """Build a FAISS vector store from document chunks."""
     if not chunks:
         raise ValueError("No text chunks provided — cannot build vector store.")
-    embeddings = _get_embeddings()
-    return FAISS.from_documents(chunks, embeddings)
+    return FAISS.from_documents(chunks, _get_embeddings())
 
 
 def load_vector_store(index_path: str = "faiss_index"):
-    """
-    Load a previously saved FAISS index from disk.
-
-    Returns:
-        FAISS vector store, or None if the index doesn't exist.
-    """
+    """Load a saved FAISS index from disk."""
     if not os.path.exists(index_path):
         return None
-    embeddings = _get_embeddings()
     return FAISS.load_local(
         index_path,
-        embeddings,
+        _get_embeddings(),
         allow_dangerous_deserialization=True,
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Retrieval
-# ──────────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  Retrieval
+# ══════════════════════════════════════════════════════════════════════════════
 
-def retrieve_docs(vector_store, query: str, k: int = 5):
+def retrieve_docs(vector_store, query: str, k: int = 3):
     """
-    Return the top-k most relevant document chunks for a query.
-
-    Args:
-        vector_store: FAISS vector store.
-        query:        Search query string.
-        k:            Number of chunks to return.
-
-    Returns:
-        List of LangChain Document objects.
+    Return top-k relevant chunks.
+    FIX: Reduced k 5→3 to cut context size per Gemini call.
     """
     return vector_store.similarity_search(query, k=k)
 
 
-def retrieve_per_document(vector_store, query: str, chunks_per_doc: int = 5):
+def retrieve_per_document(vector_store, query: str, chunks_per_doc: int = 3):
     """
-    Retrieve chunks balanced across all documents in the index.
-    Useful for broad "summarize everything" queries so one large doc
-    doesn't crowd out smaller ones.
-
-    Args:
-        vector_store:  FAISS vector store.
-        query:         Search query string.
-        chunks_per_doc: Max chunks to include per source document.
-
-    Returns:
-        Tuple of (balanced_chunks: list, source_names: list[str]).
+    Retrieve chunks balanced across all documents.
+    FIX: Reduced chunks_per_doc 5→3 and over-fetch k 50→30.
     """
-    # Over-retrieve then balance
-    all_results = vector_store.similarity_search(query, k=50)
+    all_results = vector_store.similarity_search(query, k=30)
 
-    doc_chunks: dict[str, list] = defaultdict(list)
+    doc_chunks = defaultdict(list)
     for doc in all_results:
         source = doc.metadata.get("source", "Unknown")
         doc_chunks[source].append(doc)
@@ -165,100 +125,52 @@ def retrieve_per_document(vector_store, query: str, chunks_per_doc: int = 5):
     return balanced, list(doc_chunks.keys())
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Query Reformulation
-# ──────────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  Query Reformulation
+#  FIX: Disabled entirely — saves 1 full Gemini API call per user message.
+#  Re-enable the commented block below when on a paid plan.
+# ══════════════════════════════════════════════════════════════════════════════
 
 def reformulate_query(query: str, chat_history: list) -> str:
-    """
-    Rewrite a short or ambiguous follow-up query into a fully self-contained
-    question, improving retrieval accuracy.
+    """Returns query unchanged. Reformulation disabled to save free-tier quota."""
+    return query
 
-    Example:
-        History: "What is the return policy?"
-        Query:   "How long does it take?"
-        Output:  "How long does the enterprise return process take?"
-
-    Skips reformulation if:
-    - The query is already long (> 8 words).
-    - There is no chat history to draw context from.
-
-    Args:
-        query:        The raw user query.
-        chat_history: List of {"role": str, "content": str} dicts.
-
-    Returns:
-        Rewritten query string (falls back to original on any error).
-    """
-    # Long, explicit queries don't need rewriting
-    if len(query.split()) > 8:
-        return query
-
-    # Nothing to resolve pronouns against
-    if not chat_history:
-        return query
-
-    # Build compact history (last 3 exchanges = 6 messages)
-    recent = chat_history[-6:]
-    history_text = ""
-    for msg in recent:
-        role = "User" if msg["role"] == "user" else "Assistant"
-        history_text += f"{role}: {msg['content'][:300]}\n"
-
-    prompt = f"""You are a search query optimizer.
-
-Given the conversation history and the current user question, rewrite the \
-question to be fully self-contained and specific — as if there were no \
-conversation history. Optimize for searching a document database.
-
-Rules:
-- Return ONLY the rewritten query, nothing else
-- No explanations, no quotes, no preamble
-- If the question is already clear and self-contained, return it unchanged
-- Resolve pronouns (it, they, this, that) using context from history
-- Expand vague time/duration questions using context
-
-Conversation History:
-{history_text}
-
-Current Question: {query}
-
-Rewritten Query:"""
-
-    try:
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=prompt,
-        )
-        rewritten = response.text.strip().strip('"').strip("'")
-        if 5 < len(rewritten) < 500:
-            return rewritten
-        return query
-    except Exception:
-        return query  # Always fall back gracefully
+    # ── Uncomment to re-enable on paid plan ───────────────────────────────────
+    # if len(query.split()) > 8 or not chat_history:
+    #     return query
+    # recent = chat_history[-6:]
+    # history_text = ""
+    # for msg in recent:
+    #     role = "User" if msg["role"] == "user" else "Assistant"
+    #     history_text += f"{role}: {msg['content'][:200]}\n"
+    # prompt = (
+    #     "Rewrite the question to be fully self-contained for document search.\n"
+    #     "Return ONLY the rewritten query, nothing else.\n"
+    #     f"History:\n{history_text}\nQuestion: {query}\nRewritten:"
+    # )
+    # try:
+    #     time.sleep(4)
+    #     response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+    #     rewritten = response.text.strip().strip('"').strip("'")
+    #     return rewritten if 5 < len(rewritten) < 500 else query
+    # except Exception:
+    #     return query
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Answer Generation
-# ──────────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  Answer Generation
+# ══════════════════════════════════════════════════════════════════════════════
 
 def generate_answer(
     context_docs: list,
     query: str,
     chat_history: list | None = None,
-    max_history_turns: int = 3,
+    max_history_turns: int = 1,    # FIX: Reduced 3→1 to cut tokens per call
 ) -> str:
     """
-    Generate a grounded answer using retrieved document context.
-
-    Args:
-        context_docs:       Retrieved LangChain Document objects.
-        query:              Current user question (already reformulated).
-        chat_history:       Optional conversation history for follow-up awareness.
-        max_history_turns:  How many past exchange pairs to include.
-
-    Returns:
-        Answer string from Gemini, or a descriptive error/fallback message.
+    Generate a grounded answer from retrieved document context.
+    FIX: max_history_turns reduced 3→1, history truncated to 200 chars each.
+    FIX: time.sleep(4) added before API call to respect RPM limits.
     """
     context = "\n\n".join([doc.page_content for doc in context_docs])
 
@@ -268,44 +180,35 @@ def generate_answer(
             "Try rephrasing your question or uploading additional documents."
         )
 
-    # ── Build conversation history block ──────────────────────────────────────
+    # Build compact history — only last 1 exchange, max 200 chars each
     history_block = ""
     if chat_history:
-        recent_messages = chat_history[-(max_history_turns * 2):]
-        if recent_messages:
-            history_block = (
-                "Conversation History "
-                "(use ONLY to understand context — NOT as a fact source):\n"
-            )
-            for msg in recent_messages:
+        recent = chat_history[-(max_history_turns * 2):]
+        if recent:
+            history_block = "Recent context (for reference only — not a fact source):\n"
+            for msg in recent:
                 role = "User" if msg["role"] == "user" else "Assistant"
-                history_block += f"{role}: {msg['content'][:400]}\n"
+                history_block += f"{role}: {msg['content'][:200]}\n"
             history_block += "\n"
 
     prompt = f"""You are an enterprise AI support copilot.
+Answer using ONLY the Document Context below.
 
-Use ONLY the provided Document Context below to answer the question.
-
-STRICT RULES:
-1. Use ONLY information from the Document Context section.
-2. You may use the Conversation History to understand context (resolve pronouns,
-   understand follow-ups), but NEVER use it as a source of facts.
-3. Do NOT use any knowledge from your training data.
-4. Do NOT guess or make assumptions.
-5. If the exact answer is not in the context, say:
-   "I could not find this information in the uploaded documents."
-6. Keep answers concise and accurate.
-7. When relevant, indicate which part of the document supports your answer.
+Rules:
+1. Only use information from Document Context.
+2. If the answer is not in the context say: "I could not find this in the uploaded documents."
+3. Be concise. No padding or filler.
+4. Do not use training knowledge.
 
 {history_block}Document Context:
 {context}
 
-Current Question:
-{query}
+Question: {query}
 
 Answer:"""
 
     try:
+        time.sleep(4)    # FIX: pace requests — stay under free-tier RPM limit
         response = client.models.generate_content(
             model=MODEL_NAME,
             contents=prompt,
@@ -315,34 +218,29 @@ Answer:"""
         err = str(e)
         if "429" in err or "RESOURCE_EXHAUSTED" in err:
             return (
-                "⚠️ API rate limit reached. You have used your daily free quota. "
-                "Please wait 24 hours or upgrade your plan at aistudio.google.com."
+                "⚠️ Rate limit hit. Too many requests in the last 60 seconds. "
+                "Wait 60 seconds and try again. "
+                "Check your limits at aistudio.google.com."
             )
         return f"⚠️ Error generating answer: {err}"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Document Summarisation
-# ──────────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  Document Summarisation
+# ══════════════════════════════════════════════════════════════════════════════
 
 def summarize_all_documents(vector_store, all_source_names: list) -> dict:
     """
-    Produce a structured summary for each document in the index.
-
-    Args:
-        vector_store:     FAISS vector store.
-        all_source_names: List of document names (as stored in chunk metadata).
-
-    Returns:
-        Dict mapping source_name → summary_string.
+    Produce a structured summary for each document.
+    FIX: k reduced 60→20, chunk limit [:20]→[:5], time.sleep(4) added.
     """
-    summaries: dict[str, str] = {}
+    summaries = {}
 
     for source in all_source_names:
-        # Fetch broadly then filter to this doc
+        # FIX: k=20 instead of k=60 — massive TPM saver
         all_results = vector_store.similarity_search(
             "summary overview main points key information",
-            k=60,
+            k=20,
         )
         doc_chunks = [
             doc for doc in all_results
@@ -353,14 +251,15 @@ def summarize_all_documents(vector_store, all_source_names: list) -> dict:
             summaries[source] = "Could not retrieve content from this document."
             continue
 
-        context = "\n\n".join([doc.page_content for doc in doc_chunks[:20]])
+        # FIX: only use 5 chunks instead of 20 — cuts tokens per call ~75%
+        context = "\n\n".join([doc.page_content for doc in doc_chunks[:5]])
 
-        prompt = f"""You are summarising a document called "{source}".
+        prompt = f"""Summarise the document "{source}" using ONLY the context below.
 
-Using ONLY the context below, provide:
-1. What this document is about (2–3 sentences)
-2. Key points (bullet points)
-3. Most important information the reader should know
+Provide:
+1. What this document is about (2 sentences max)
+2. Key points (bullet points, max 5)
+3. Most important takeaway (1 sentence)
 
 Context:
 {context}
@@ -368,6 +267,7 @@ Context:
 Summary:"""
 
         try:
+            time.sleep(4)    # FIX: pace between summarisation calls
             response = client.models.generate_content(
                 model=MODEL_NAME,
                 contents=prompt,
@@ -376,10 +276,8 @@ Summary:"""
         except Exception as e:
             err = str(e)
             if "429" in err or "RESOURCE_EXHAUSTED" in err:
-                summaries[source] = (
-                    "⚠️ Rate limit reached. Please wait and try again."
-                )
-                break  # Stop processing further docs
+                summaries[source] = "⚠️ Rate limit hit. Wait 60 seconds and try again."
+                break
             summaries[source] = f"⚠️ Error: {err}"
 
     return summaries
