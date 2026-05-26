@@ -499,15 +499,23 @@ with st.sidebar:
 
     st.divider()
 
-    if st.session_state.source_names:
+        if st.session_state.source_names:
         st.caption("Active Document Scope")
+
         new_sel = list(st.session_state.selected_docs)
 
         for name in st.session_state.source_names:
-            label   = (name[:26] + "…") if len(name) > 27 else name
-            checked = st.checkbox(label, value=(name in new_sel), key=f"cb_{name}")
+            label = (name[:26] + "…") if len(name) > 27 else name
+
+            checked = st.checkbox(
+                label,
+                value=(name in new_sel),
+                key=f"cb_{name}"
+            )
+
             if checked and name not in new_sel:
                 new_sel.append(name)
+
             elif not checked and name in new_sel:
                 new_sel.remove(name)
 
@@ -515,10 +523,12 @@ with st.sidebar:
             st.session_state.selected_docs = new_sel
             st.rerun()
 
-                st.write("")
+        st.write("")
 
         def select_all_docs():
-            st.session_state.selected_docs = list(st.session_state.source_names)
+            st.session_state.selected_docs = list(
+                st.session_state.source_names
+            )
 
             for doc in st.session_state.source_names:
                 st.session_state[f"cb_{doc}"] = True
