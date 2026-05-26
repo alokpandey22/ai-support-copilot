@@ -70,6 +70,25 @@ html, body,
   background: var(--elevated) !important;
   border-right: 1px solid var(--border) !important;
 }
+/* Sidebar reopen button fix */
+button[kind="header"] {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  color: var(--gold) !important;
+  width: 34px !important;
+  height: 34px !important;
+  transition: all 0.18s ease !important;
+}
+
+button[kind="header"]:hover {
+  border-color: var(--gold-border) !important;
+  background: var(--gold-bg) !important;
+}
+
+button[kind="header"] svg {
+  fill: var(--gold) !important;
+}
 [data-testid="stSidebar"] section[data-testid="stSidebarContent"] {
   padding: 1rem 1rem 2rem !important;
   gap: 0.5rem !important;
@@ -496,16 +515,35 @@ with st.sidebar:
             st.session_state.selected_docs = new_sel
             st.rerun()
 
-        st.write("")
+                st.write("")
+
+        def select_all_docs():
+            st.session_state.selected_docs = list(st.session_state.source_names)
+
+            for doc in st.session_state.source_names:
+                st.session_state[f"cb_{doc}"] = True
+
+        def clear_all_docs():
+            st.session_state.selected_docs = []
+
+            for doc in st.session_state.source_names:
+                st.session_state[f"cb_{doc}"] = False
+
         qa, qb = st.columns(2)
+
         with qa:
-            if st.button("☑ All", key="sel_all"):
-                st.session_state.selected_docs = list(st.session_state.source_names)
-                st.rerun()
+            st.button(
+                "☑ All",
+                key="sel_all",
+                on_click=select_all_docs,
+            )
+
         with qb:
-            if st.button("☐ None", key="sel_none"):
-                st.session_state.selected_docs = []
-                st.rerun()
+            st.button(
+                "☐ None",
+                key="sel_none",
+                on_click=clear_all_docs,
+            )
 
     st.divider()
     st.caption("Response Quality")
