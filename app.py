@@ -70,7 +70,6 @@ html, body,
   background: var(--elevated) !important;
   border-right: 1px solid var(--border) !important;
 }
-/* Sidebar reopen button fix */
 button[kind="header"] {
   background: var(--surface) !important;
   border: 1px solid var(--border) !important;
@@ -499,7 +498,8 @@ with st.sidebar:
 
     st.divider()
 
-            if st.session_state.source_names:
+    # ── FIX: was indented 12 spaces, now correctly 4 spaces inside `with st.sidebar` ──
+    if st.session_state.source_names:
         st.caption("Active Document Scope")
 
         new_sel = list(st.session_state.selected_docs)
@@ -515,7 +515,6 @@ with st.sidebar:
 
             if checked and name not in new_sel:
                 new_sel.append(name)
-
             elif not checked and name in new_sel:
                 new_sel.remove(name)
 
@@ -526,34 +525,20 @@ with st.sidebar:
         st.write("")
 
         def select_all_docs():
-            st.session_state.selected_docs = list(
-                st.session_state.source_names
-            )
-
+            st.session_state.selected_docs = list(st.session_state.source_names)
             for doc in st.session_state.source_names:
                 st.session_state[f"cb_{doc}"] = True
 
         def clear_all_docs():
             st.session_state.selected_docs = []
-
             for doc in st.session_state.source_names:
                 st.session_state[f"cb_{doc}"] = False
 
         qa, qb = st.columns(2)
-
         with qa:
-            st.button(
-                "☑ All",
-                key="sel_all",
-                on_click=select_all_docs,
-            )
-
+            st.button("☑ All",  key="sel_all",  on_click=select_all_docs)
         with qb:
-            st.button(
-                "☐ None",
-                key="sel_none",
-                on_click=clear_all_docs,
-            )
+            st.button("☐ None", key="sel_none", on_click=clear_all_docs)
 
     st.divider()
     st.caption("Response Quality")
@@ -798,7 +783,6 @@ if query:
 
         ql = query.lower()
 
-        # Detect if query is broad/multi-doc in nature
         is_multi_doc_query = any(w in ql for w in [
             "all documents", "every document", "each document",
             "all docs", "summarize all", "summary of all",
@@ -813,7 +797,6 @@ if query:
         ])
 
         if is_multi_doc_query and len(active_names) > 1:
-            # Multi-doc: retrieve from ALL docs equally, answer in one call
             ctx_docs, srcs = retrieve_per_document(
                 active_vs, ref, chunks_per_doc=4
             )
@@ -821,7 +804,6 @@ if query:
             conf   = 100
 
         elif is_broad_query:
-            # Broad single query — retrieve balanced chunks and summarise
             ctx_docs, srcs = retrieve_per_document(
                 active_vs, ref, chunks_per_doc=4
             )
@@ -829,18 +811,17 @@ if query:
             conf   = min(len(ctx_docs) * 10, 100)
 
         else:
-            # Specific question — retrieve top matching chunks
             ctx_docs = retrieve_docs(active_vs, ref, k=4)
             answer   = generate_answer(ctx_docs, ref, hist)
             srcs     = list({d.metadata.get("source", "Unknown") for d in ctx_docs})
             conf     = min(len(ctx_docs) * 25, 100)
 
     st.session_state.messages.append({
-        "role":       "assistant",
-        "content":    answer,
-        "sources":    srcs,
-        "confidence": conf,
-        "feedback":   None,
+        "role":         "assistant",
+        "content":      answer,
+        "sources":      srcs,
+        "confidence":   conf,
+        "feedback":     None,
         "reformulated": None,
     })
     st.rerun()
