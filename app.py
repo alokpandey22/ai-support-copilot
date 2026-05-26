@@ -61,9 +61,30 @@ html, body,
   font-family: var(--f-ui) !important;
   -webkit-font-smoothing: antialiased;
 }
-[data-testid="stHeader"],
+[data-testid="stHeader"] { background: transparent !important; }
 [data-testid="stDecoration"],
 #MainMenu, footer { display: none !important; }
+
+[data-testid="stSidebarCollapsedControl"] {
+  display: flex !important;
+  position: fixed !important;
+  top: 12px !important;
+  left: 12px !important;
+  z-index: 999 !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] button {
+  background: var(--surface) !important;
+  border: 1px solid var(--gold-border) !important;
+  border-radius: 8px !important;
+  color: var(--gold) !important;
+  width: 34px !important;
+  height: 34px !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] button:hover {
+  background: var(--gold-bg) !important;
+}
 
 /* ─── Sidebar ────────────────────────────────────────────────────── */
 [data-testid="stSidebar"] {
