@@ -1,7 +1,6 @@
 """
 app.py  —  AI Support Copilot
-Fixed sidebar + document selection: query only selected docs.
-Fix: duplicate "uploadUpload" button text in file uploader.
+Premium dark-gold UI. Rate-limit safe version.
 """
 
 import datetime, glob, os, pickle, shutil, uuid
@@ -91,7 +90,6 @@ html, body,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Scope span styling only to safe containers, not file uploader or expander */
 [data-testid="stSidebar"] .stMarkdown span,
 [data-testid="stSidebar"] [data-testid="stMetricLabel"] span,
 [data-testid="stSidebar"] [data-testid="stMetricValue"] span {
@@ -99,19 +97,11 @@ html, body,
   font-size: 11px !important;
   color: var(--text-2) !important;
 }
-/* Expander: hide the raw .arr arrow span that leaks as visible text */
-[data-testid="stSidebar"] details > summary::-webkit-details-marker { display: none !important; }
 [data-testid="stSidebar"] details > summary { list-style: none !important; }
 [data-testid="stSidebar"] [data-testid="stExpanderToggleIcon"] { display: none !important; }
-[data-testid="stSidebar"] .stExpander details summary svg { display: none !important; }
 
-/* ─── File uploader button: FIX for duplicate "uploadUpload" text ── */
-/* Streamlit renders two <span> elements inside the browse/upload button:
-   one from the user-supplied label and one hardcoded "Upload" string.
-   Hide ALL spans, then inject a single clean label via ::after. */
-[data-testid="stSidebar"] .stFileUploader button span {
-  display: none !important;
-}
+/* File uploader — fix duplicate upload text */
+[data-testid="stSidebar"] .stFileUploader button span { display: none !important; }
 [data-testid="stSidebar"] .stFileUploader button::after {
   content: "↑ Upload PDFs";
   font-family: var(--f-mono) !important;
@@ -120,7 +110,6 @@ html, body,
   white-space: nowrap;
   letter-spacing: 0.04em;
 }
-
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
   font-size: 9.5px !important;
   letter-spacing: 0.14em;
@@ -129,8 +118,11 @@ html, body,
   margin-bottom: 4px !important;
   white-space: normal !important;
 }
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"],
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] *,
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] > div { display: none !important; }
 
-/* ─── Metric widgets ─────────────────────────────────────────────── */
+/* Metric tiles */
 [data-testid="stSidebar"] [data-testid="stMetric"] {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -150,7 +142,7 @@ html, body,
   white-space: normal !important;
 }
 
-/* ─── Sidebar checkboxes (doc scope toggles) ────────────────────── */
+/* Checkboxes */
 [data-testid="stSidebar"] .stCheckbox {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -174,14 +166,10 @@ html, body,
   max-width: 180px;
   display: inline-block;
 }
-[data-testid="stSidebar"] .stCheckbox:has(input:checked) label {
-  color: var(--gold) !important;
-}
-[data-testid="stSidebar"] .stCheckbox input[type="checkbox"] {
-  accent-color: var(--gold) !important;
-}
+[data-testid="stSidebar"] .stCheckbox:has(input:checked) label { color: var(--gold) !important; }
+[data-testid="stSidebar"] .stCheckbox input[type="checkbox"] { accent-color: var(--gold) !important; }
 
-/* ─── "Select All / Clear" toggle buttons ────────────────────────── */
+/* Sidebar buttons */
 [data-testid="stSidebar"] .stButton > button {
   width: 100% !important;
   background: transparent !important;
@@ -192,7 +180,6 @@ html, body,
   font-size: 11px !important;
   padding: 5px 10px !important;
   transition: all 0.18s !important;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
   border-color: var(--gold) !important;
@@ -200,7 +187,7 @@ html, body,
   background: var(--gold-bg) !important;
 }
 
-/* ─── File uploader container ────────────────────────────────────── */
+/* File uploader container */
 [data-testid="stSidebar"] .stFileUploader > div {
   background: var(--gold-bg) !important;
   border: 1px dashed var(--gold-border) !important;
@@ -209,12 +196,7 @@ html, body,
 }
 [data-testid="stSidebar"] .stFileUploader label { color: var(--gold) !important; }
 
-/* Aggressively hide all instruction/label spans inside the dropzone */
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"],
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] *,
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] > div { display: none !important; }
-
-/* ─── Download button ────────────────────────────────────────────── */
+/* Download button */
 [data-testid="stSidebar"] .stDownloadButton > button {
   width: 100% !important;
   background: transparent !important;
@@ -232,7 +214,7 @@ html, body,
   background: var(--gold-bg) !important;
 }
 
-/* ─── Expander ───────────────────────────────────────────────────── */
+/* Expander */
 [data-testid="stSidebar"] .stExpander {
   background: var(--surface) !important;
   border: 1px solid var(--border) !important;
@@ -240,7 +222,7 @@ html, body,
 }
 [data-testid="stSidebar"] hr { border-color: var(--border) !important; margin: 8px 0 !important; }
 
-/* ─── Status badge ───────────────────────────────────────────────── */
+/* Status badge */
 .sb-status {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 10px; font-family: var(--f-mono);
@@ -256,7 +238,7 @@ html, body,
 }
 @keyframes hb { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.3;transform:scale(.8)} }
 
-/* ─── Scope pill shown in topbar ─────────────────────────────────── */
+/* Scope pill */
 .scope-pill {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 10px; font-family: var(--f-mono);
@@ -264,7 +246,7 @@ html, body,
   color: var(--gold); border-radius: 100px; padding: 3px 10px;
 }
 
-/* ─── Quality card ───────────────────────────────────────────────── */
+/* Quality card */
 .sb-quality {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px;
@@ -278,7 +260,7 @@ html, body,
 .sb-qm-num { font-family: var(--f-brand) !important; font-size: 20px !important; font-weight: 600; line-height: 1.1; }
 .sb-qm-lbl { font-size: 8.5px !important; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255,255,255,0.2) !important; font-family: var(--f-mono) !important; margin-top: 2px; }
 
-/* ─── Main / topbar ──────────────────────────────────────────────── */
+/* ─── Main ───────────────────────────────────────────────────────── */
 [data-testid="stMain"] { background: var(--base) !important; }
 .block-container { padding: 0 !important; max-width: 100% !important; }
 
@@ -289,7 +271,6 @@ html, body,
 }
 .tb-crumb  { font-size: 12px; color: var(--text-2); font-family: var(--f-mono); }
 .tb-sep    { width: 1px; height: 14px; background: var(--border); flex-shrink: 0; }
-.tb-session{ font-size: 12px; color: rgba(255,255,255,0.25); font-family: var(--f-mono); }
 
 /* ─── Chat ───────────────────────────────────────────────────────── */
 .chat-pad { padding: 32px 40px 12px; max-width: 820px; margin: 0 auto; }
@@ -329,8 +310,6 @@ html, body,
 .conf-track { width:60px; height:3px; background:var(--surface-2); border-radius:3px; overflow:hidden; }
 .conf-fill  { height:100%; background:var(--gold); border-radius:3px; }
 .conf-text  { font-size:9.5px; font-family:var(--f-mono); color:rgba(255,255,255,0.2); }
-.search-hint { display:inline-flex; align-items:center; gap:4px; font-size:9.5px; font-family:var(--f-mono); color:rgba(255,255,255,0.18); }
-.search-hint em { color:rgba(201,169,110,.7); font-style:normal; }
 .fb-rated { font-size:9.5px; font-family:var(--f-mono); color:rgba(255,255,255,0.2); padding-left:41px; margin-top:3px; }
 
 [data-testid="stMain"] .stButton > button {
@@ -343,7 +322,10 @@ html, body,
   border-color: var(--border-md) !important; color: var(--text-1) !important;
 }
 
-.input-hint { text-align:center; font-size:10px; font-family:var(--f-mono); color:rgba(255,255,255,0.13); letter-spacing:.04em; margin: 6px 0 2px; }
+.input-hint {
+  text-align:center; font-size:10px; font-family:var(--f-mono);
+  color:rgba(255,255,255,0.13); letter-spacing:.04em; margin: 6px 0 2px;
+}
 
 [data-testid="stChatInputContainer"] {
   background: var(--elevated) !important; border: 1px solid var(--border-md) !important;
@@ -365,7 +347,9 @@ html, body,
   background: var(--surface) !important; border: 1px solid var(--border-md) !important;
   border-radius: 8px !important; font-family: var(--f-mono) !important; font-size: 11px !important;
 }
-[data-testid="stExpander"] { background: var(--elevated) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; }
+[data-testid="stExpander"] {
+  background: var(--elevated) !important; border: 1px solid var(--border) !important; border-radius: 8px !important;
+}
 
 /* ─── Onboarding ─────────────────────────────────────────────────── */
 .ob-card {
@@ -399,13 +383,13 @@ html, body,
 #  SESSION STATE
 # ══════════════════════════════════════════════════════════════════════════════
 for k, v in {
-    "vector_store":    None,
-    "uploaded_count":  0,
-    "messages":        [],
-    "source_names":    [],
-    "doc_chunks":      {},
-    "query_log":       [],
-    "selected_docs":   [],
+    "vector_store":   None,
+    "uploaded_count": 0,
+    "messages":       [],
+    "source_names":   [],
+    "doc_chunks":     {},
+    "query_log":      [],
+    "selected_docs":  [],
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -430,7 +414,6 @@ def rebuild_vs(dc):
     return vs
 
 def build_scoped_vs(selected_names, doc_chunks):
-    """Build an in-memory vector store scoped to only the selected documents."""
     chunks = [c for name in selected_names for c in doc_chunks.get(name, [])]
     if not chunks: return None
     return create_vector_store(chunks)
@@ -457,7 +440,7 @@ def truncate(s, n=22):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  AUTO-LOAD
+#  AUTO-LOAD persisted index
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.vector_store is None:
     saved = load_doc_chunks()
@@ -478,18 +461,20 @@ with st.sidebar:
     n_queries = len([m for m in st.session_state.messages if m["role"] == "user"])
     sel       = st.session_state.selected_docs
 
-    # ── Brand ─────────────────────────────────────────────────────────────────
+    # ── Brand ──────────────────────────────────────────────────────────────────
     st.markdown(f"""
     <div style="padding:20px 0 16px">
       <div style="display:flex;align-items:center;gap:10px">
-        <div style="width:32px;height:32px;border-radius:8px;background:var(--gold-dim);border:1px solid var(--gold-border);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-          {GEM}
-        </div>
+        <div style="width:32px;height:32px;border-radius:8px;background:var(--gold-dim);
+             border:1px solid var(--gold-border);display:flex;align-items:center;
+             justify-content:center;flex-shrink:0">{GEM}</div>
         <div>
-          <div style="font-family:var(--f-brand);font-size:20px;font-weight:600;color:var(--text-1);line-height:1">
+          <div style="font-family:var(--f-brand);font-size:20px;font-weight:600;
+               color:var(--text-1);line-height:1">
             Copilot<span style="color:var(--gold)">AI</span>
           </div>
-          <div style="font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:rgba(255,255,255,0.2);font-family:var(--f-mono);margin-top:2px">
+          <div style="font-size:9px;letter-spacing:0.14em;text-transform:uppercase;
+               color:rgba(255,255,255,0.2);font-family:var(--f-mono);margin-top:2px">
             Enterprise Intelligence
           </div>
         </div>
@@ -504,9 +489,6 @@ with st.sidebar:
     st.divider()
 
     # ── Upload ─────────────────────────────────────────────────────────────────
-    # FIX: pass empty string "" as the label (label_visibility="collapsed" hides
-    # it anyway), so Streamlit's button only has one text node to render.
-    # The CSS ::after pseudo-element injects the visible "↑ Upload PDFs" text.
     st.caption("Upload Documents")
     uploaded_files = st.file_uploader(
         "", type="pdf", accept_multiple_files=True, label_visibility="collapsed"
@@ -519,16 +501,14 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Document library + selector ────────────────────────────────────────────
+    # ── Document scope selector ─────────────────────────────────────────────────
     if st.session_state.source_names:
         st.caption("Active Document Scope")
-
-        new_sel = list(st.session_state.selected_docs)  # copy to detect changes
+        new_sel = list(st.session_state.selected_docs)
 
         for name in st.session_state.source_names:
-            is_checked = name in new_sel
-            label = (name[:26] + "…") if len(name) > 27 else name
-            checked = st.checkbox(label, value=is_checked, key=f"cb_{name}")
+            label   = (name[:26] + "…") if len(name) > 27 else name
+            checked = st.checkbox(label, value=(name in new_sel), key=f"cb_{name}")
             if checked and name not in new_sel:
                 new_sel.append(name)
             elif not checked and name in new_sel:
@@ -538,7 +518,6 @@ with st.sidebar:
             st.session_state.selected_docs = new_sel
             st.rerun()
 
-        # ── Quick-select buttons ───────────────────────────────────────────────
         st.write("")
         qa, qb = st.columns(2)
         with qa:
@@ -550,7 +529,7 @@ with st.sidebar:
                 st.session_state.selected_docs = []
                 st.rerun()
 
-    # ── Quality metrics ────────────────────────────────────────────────────────
+    # ── Quality metrics ─────────────────────────────────────────────────────────
     st.divider()
     st.caption("Response Quality")
     helpful   = sum(1 for m in st.session_state.messages if m.get("feedback") == "helpful")
@@ -567,7 +546,7 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Manage docs ────────────────────────────────────────────────────────────
+    # ── Manage docs ─────────────────────────────────────────────────────────────
     if st.session_state.source_names:
         with st.expander("🗂️ Manage Documents"):
             for name in list(st.session_state.source_names):
@@ -599,7 +578,7 @@ with st.sidebar:
                     elif os.path.isfile(p): os.remove(p)
                 st.rerun()
 
-    # ── Export ─────────────────────────────────────────────────────────────────
+    # ── Export ──────────────────────────────────────────────────────────────────
     if st.session_state.messages:
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
         st.download_button(
@@ -658,14 +637,19 @@ else:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MAIN — topbar
+#  TOPBAR
 # ══════════════════════════════════════════════════════════════════════════════
 n_docs = len(st.session_state.source_names)
 if sel:
-    scope_label = f"{len(sel)} of {n_docs} doc{'s' if n_docs!=1 else ''} active"
-    scope_html  = f'<span class="scope-pill">🎯 {scope_label}</span>'
+    scope_html = (
+        f'<span class="scope-pill">🎯 {len(sel)} of {n_docs} '
+        f'doc{"s" if n_docs!=1 else ""} active</span>'
+    )
 else:
-    scope_html  = '<span style="font-size:11px;font-family:var(--f-mono);color:var(--red);opacity:.7">⚠ No documents selected</span>'
+    scope_html = (
+        '<span style="font-size:11px;font-family:var(--f-mono);'
+        'color:var(--red);opacity:.7">⚠ No documents selected</span>'
+    )
 
 st.markdown(f"""
 <div class="topbar">
@@ -675,7 +659,9 @@ st.markdown(f"""
 </div>""", unsafe_allow_html=True)
 
 
-# ── Onboarding ─────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  ONBOARDING
+# ══════════════════════════════════════════════════════════════════════════════
 if not st.session_state.vector_store:
     st.markdown("""
     <div class="ob-card">
@@ -694,15 +680,16 @@ if not st.session_state.vector_store:
     """, unsafe_allow_html=True)
     st.stop()
 
-# ── No docs selected warning ───────────────────────────────────────────────────
 if not sel:
-    st.info("⚠️ No documents selected. Use the sidebar to choose which documents to query.")
+    st.info("⚠️ No documents selected. Use the sidebar checkboxes to choose which documents to query.")
     st.stop()
 
 
-# ── Conversation ───────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  CONVERSATION
+# ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.messages:
-    today = datetime.datetime.now().strftime("%b %d")
+    today     = datetime.datetime.now().strftime("%b %d")
     scope_ctx = f"{len(sel)} doc{'s' if len(sel)!=1 else ''} in scope"
     st.markdown(f"""
     <div class="chat-pad">
@@ -726,14 +713,14 @@ if st.session_state.messages:
                 f'<span class="chip"><span class="chip-dot"></span>{s}</span>'
                 for s in msg.get("sources", [])
             )
-            conf = msg.get("confidence", 0)
-            cc   = "var(--emerald)" if conf == 100 else "var(--gold)"
-            conf_html = (f'<div class="conf-wrap">'
-                         f'<div class="conf-track"><div class="conf-fill" style="width:{conf}%;background:{cc}"></div></div>'
-                         f'<span class="conf-text">{conf}% conf.</span></div>')
-            hint_html = ""
-            if msg.get("reformulated"):
-                hint_html = f'<span class="search-hint">🔍 Searched: <em>{msg["reformulated"]}</em></span>'
+            conf      = msg.get("confidence", 0)
+            cc        = "var(--emerald)" if conf == 100 else "var(--gold)"
+            conf_html = (
+                f'<div class="conf-wrap">'
+                f'<div class="conf-track"><div class="conf-fill" '
+                f'style="width:{conf}%;background:{cc}"></div></div>'
+                f'<span class="conf-text">{conf}% conf.</span></div>'
+            )
 
             st.markdown(f"""
             <div class="msg-a">
@@ -741,30 +728,41 @@ if st.session_state.messages:
                 <div class="a-gem">{GEM}</div>
                 <div class="a-bubble"><p>{content_html}</p></div>
               </div>
-              <div class="a-meta">{chips}{conf_html}{hint_html}</div>
+              <div class="a-meta">{chips}{conf_html}</div>
             </div>""", unsafe_allow_html=True)
 
             fb = msg.get("feedback")
             if fb:
                 icon = "👍" if fb == "helpful" else "👎"
-                st.markdown(f'<div class="fb-rated">{icon} You rated this response</div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="fb-rated">{icon} You rated this response</div>',
+                    unsafe_allow_html=True,
+                )
             else:
                 fc1, fc2, fc3 = st.columns([0.05, 0.05, 0.9])
                 with fc1:
                     if st.button("👍", key=f"up_{i}"):
-                        st.session_state.messages[i]["feedback"] = "helpful"; st.rerun()
+                        st.session_state.messages[i]["feedback"] = "helpful"
+                        st.rerun()
                 with fc2:
                     if st.button("👎", key=f"dn_{i}"):
-                        st.session_state.messages[i]["feedback"] = "unhelpful"; st.rerun()
+                        st.session_state.messages[i]["feedback"] = "unhelpful"
+                        st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-# ── Input + chat ───────────────────────────────────────────────────────────────
-sel_names_str = ", ".join(truncate(d, 20) for d in sel[:3])
-if len(sel) > 3: sel_names_str += f" +{len(sel)-3} more"
+# ══════════════════════════════════════════════════════════════════════════════
+#  CHAT INPUT
+# ══════════════════════════════════════════════════════════════════════════════
+sel_str = ", ".join(truncate(d, 18) for d in sel[:3])
+if len(sel) > 3:
+    sel_str += f" +{len(sel)-3} more"
+
 st.markdown(
-    f'<div class="input-hint">Searching: {sel_names_str} · Gemini 1.5 Flash</div>',
+    f'<div class="input-hint">'
+    f'Searching: {sel_str} · Gemini 2.0 Flash · rate-limit safe'
+    f'</div>',
     unsafe_allow_html=True,
 )
 
@@ -772,32 +770,41 @@ query = st.chat_input("Ask anything about your documents…")
 
 if query:
     st.session_state.messages.append({"role": "user", "content": query})
-    with st.spinner(""):
+
+    with st.spinner("Thinking… (4s pacing applied between API calls)"):
         hist = st.session_state.messages[:-1]
-        ref  = reformulate_query(query, hist)
-        if ref != query: st.session_state.query_log.append((query, ref))
+        ref  = reformulate_query(query, hist)   # returns query unchanged on free tier
 
         ql = query.lower()
 
-        if any(w in ql for w in ["summarize all","summary of all","all documents","each document","one by one","every document"]):
+        if any(w in ql for w in [
+            "summarize all", "summary of all", "all documents",
+            "each document", "one by one", "every document",
+        ]):
             sums   = summarize_all_documents(active_vs, active_names)
             answer = "".join(f"### 📄 {k}\n{v}\n\n---\n\n" for k, v in sums.items())
-            srcs   = active_names; conf = 100
+            srcs   = active_names
+            conf   = 100
 
-        elif any(w in ql for w in ["summarize","summary","overview","everything","tell me about"]):
-            ctx_docs, srcs = retrieve_per_document(active_vs, ref, chunks_per_doc=5)
+        elif any(w in ql for w in [
+            "summarize", "summary", "overview", "everything", "tell me about",
+        ]):
+            ctx_docs, srcs = retrieve_per_document(active_vs, ref, chunks_per_doc=3)
             answer = generate_answer(ctx_docs, ref, hist)
             conf   = min(len(ctx_docs) * 10, 100)
 
         else:
-            ctx_docs = retrieve_docs(active_vs, ref, k=5)
+            ctx_docs = retrieve_docs(active_vs, ref, k=3)
             answer   = generate_answer(ctx_docs, ref, hist)
             srcs     = list({d.metadata.get("source", "Unknown") for d in ctx_docs})
-            conf     = min(len(ctx_docs) * 20, 100)
+            conf     = min(len(ctx_docs) * 33, 100)
 
     st.session_state.messages.append({
-        "role": "assistant", "content": answer, "sources": srcs,
-        "confidence": conf, "feedback": None,
-        "reformulated": ref if ref != query else None,
+        "role":         "assistant",
+        "content":      answer,
+        "sources":      srcs,
+        "confidence":   conf,
+        "feedback":     None,
+        "reformulated": None,
     })
     st.rerun()
