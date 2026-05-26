@@ -34,8 +34,8 @@ if not _api_key:
 
 client = genai.Client(api_key=_api_key)
 
-MODEL_NAME    = "gemini-2.0-flash"
-_CALL_DELAY   = 6      # seconds before every call — targets ~9 RPM (free tier = 15 RPM)
+MODEL_NAME    = "gemini-2.0-flash-lite"
+_CALL_DELAY   = 13      # seconds before every call — targets ~9 RPM (free tier = 15 RPM)
 _MAX_RETRIES  = 4
 _BASE_BACKOFF = 20     # seconds for first retry; doubles each attempt
 
@@ -82,8 +82,8 @@ def _call_gemini(prompt: str) -> str:
 
             if "404" in err or "NOT_FOUND" in err:
                 return (
-                    "⚠️ Model not available. "
-                    "Check your API key has access to gemini-2.0-flash "
+                    "⚠️ Model not available."
+                    "Check your API key has access to gemini-2.0-flash-lite "
                     "at aistudio.google.com."
                 )
 
