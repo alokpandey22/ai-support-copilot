@@ -1,7 +1,7 @@
 """
 rag_pipeline.py — AI Support Copilot
 Root cause fixes:
-1. Switched to gemini-1.5-flash (15 RPM free tier, not deprecating)
+1. Switched to gemini-2.5-flash (15 RPM free tier, not deprecating)
 2. Removed retry loop — Streamlit Cloud times out before retries complete
 3. Single clean API call with one reasonable delay
 4. Summarize query now uses generate_answer (1 call) not summarize_all_documents loop
@@ -39,7 +39,7 @@ client = genai.Client(api_key=_api_key)
 
 # gemini-1.5-flash: 15 RPM, 1500 RPD on free tier — highest available
 # gemini-2.0-flash: only 5 RPM on free tier AND deprecating June 2026
-MODEL_NAME  = "gemini-1.5-flash"
+MODEL_NAME  = "gemini-2.5-flash"
 _CALL_DELAY = 2   # 2s delay = ~20 RPM theoretical max, well under 15 RPM limit
 
 _embeddings = None
