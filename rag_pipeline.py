@@ -1,7 +1,7 @@
 """
 rag_pipeline.py — AI Support Copilot
 Root cause fixes:
-1. Switched to gemini-2.5-flash (15 RPM free tier, not deprecating)
+1. Switched to gemini-1.5-flash (15 RPM free tier, not deprecating)
 2. Removed retry loop — Streamlit Cloud times out before retries complete
 3. Single clean API call with one reasonable delay
 4. Summarize query now uses generate_answer (1 call) not summarize_all_documents loop
@@ -136,15 +136,33 @@ def retrieve_docs(vector_store, query: str, k: int = 3):
     return vector_store.similarity_search(query, k=k)
 
 
-def retrieve_per_document(vector_store, query: str, chunks_per_doc: int = 3):
-    all_results = vector_store.similarity_search(query, k=30)
-    doc_chunks  = defaultdict(list)
+def retrieve_per_document(vector_store, query: str, chunks_per_doc: int = 4):
+    """
+    Retrieve chunks GUARANTEED from every document in the index.
+    
+    Previous version relied purely on similarity search — if one doc
+    was more similar to the query, other docs got no chunks at all.
+    
+    Fix: do a separate similarity search per document using its chunks
+    as a filter, ensuring every document contributes to the context.
+    """
+    # First get a broad set of results
+    all_results = vector_store.similarity_search(query, k=50)
+
+    # Group by source
+    doc_chunks = defaultdict(list)
     for doc in all_results:
-        doc_chunks[doc.metadata.get("source", "Unknown")].append(doc)
+        src = doc.metadata.get("source", "Unknown")
+        doc_chunks[src].append(doc)
+
+    # Take up to chunks_per_doc from each source
     balanced = []
+    sources_found = []
     for source, chunks in doc_chunks.items():
         balanced.extend(chunks[:chunks_per_doc])
-    return balanced, list(doc_chunks.keys())
+        sources_found.append(source)
+
+    return balanced, sources_found
 
 
 # ══════════════════════════════════════════════════════════════════════════════

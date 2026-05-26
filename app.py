@@ -750,27 +750,42 @@ if query:
 
         ql = query.lower()
 
-        if any(w in ql for w in [
-            "summarize all", "summary of all", "all documents",
-            "each document", "one by one", "every document",
-        ]):
-            sums   = summarize_all_documents(active_vs, active_names)
-            answer = "".join(f"### 📄 {k}\n{v}\n\n---\n\n" for k, v in sums.items())
-            srcs   = active_names
+        # Detect if query is broad/multi-doc in nature
+        is_multi_doc_query = any(w in ql for w in [
+            "all documents", "every document", "each document",
+            "all docs", "summarize all", "summary of all",
+            "one by one", "across all", "compare",
+            "both documents", "both docs", "all files",
+        ])
+
+        is_broad_query = any(w in ql for w in [
+            "summarize", "summary", "overview", "everything",
+            "tell me about", "what is this", "what does this",
+            "key points", "main points", "highlights",
+        ])
+
+        if is_multi_doc_query and len(active_names) > 1:
+            # Multi-doc: retrieve from ALL docs equally, answer in one call
+            ctx_docs, srcs = retrieve_per_document(
+                active_vs, ref, chunks_per_doc=4
+            )
+            answer = generate_answer(ctx_docs, ref, hist)
             conf   = 100
 
-        elif any(w in ql for w in [
-            "summarize", "summary", "overview", "everything", "tell me about",
-        ]):
-            ctx_docs, srcs = retrieve_per_document(active_vs, ref, chunks_per_doc=3)
+        elif is_broad_query:
+            # Broad single query — retrieve balanced chunks and summarise
+            ctx_docs, srcs = retrieve_per_document(
+                active_vs, ref, chunks_per_doc=4
+            )
             answer = generate_answer(ctx_docs, ref, hist)
             conf   = min(len(ctx_docs) * 10, 100)
 
         else:
-            ctx_docs = retrieve_docs(active_vs, ref, k=3)
+            # Specific question — retrieve top matching chunks
+            ctx_docs = retrieve_docs(active_vs, ref, k=4)
             answer   = generate_answer(ctx_docs, ref, hist)
             srcs     = list({d.metadata.get("source", "Unknown") for d in ctx_docs})
-            conf     = min(len(ctx_docs) * 33, 100)
+            conf     = min(len(ctx_docs) * 25, 100)
 
     st.session_state.messages.append({
         "role":       "assistant",
