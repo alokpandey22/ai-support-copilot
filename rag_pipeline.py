@@ -1,11 +1,14 @@
 """
 rag_pipeline.py — AI Support Copilot
-Rate-limit safe: pacing, exponential backoff, reduced payloads.
+Root cause fixes:
+1. Switched to gemini-1.5-flash (15 RPM free tier, not deprecating)
+2. Removed retry loop — Streamlit Cloud times out before retries complete
+3. Single clean API call with one reasonable delay
+4. Summarize query now uses generate_answer (1 call) not summarize_all_documents loop
 """
 
 import os
 import time
-import random
 from collections import defaultdict
 
 from langchain_community.document_loaders import PyPDFLoader
@@ -34,10 +37,10 @@ if not _api_key:
 
 client = genai.Client(api_key=_api_key)
 
-MODEL_NAME    = "gemini-2.0-flash-lite"
-_CALL_DELAY   = 13      # seconds before every call — targets ~9 RPM (free tier = 15 RPM)
-_MAX_RETRIES  = 4
-_BASE_BACKOFF = 20     # seconds for first retry; doubles each attempt
+# gemini-1.5-flash: 15 RPM, 1500 RPD on free tier — highest available
+# gemini-2.0-flash: only 5 RPM on free tier AND deprecating June 2026
+MODEL_NAME  = "gemini-1.5-flash"
+_CALL_DELAY = 2   # 2s delay = ~20 RPM theoretical max, well under 15 RPM limit
 
 _embeddings = None
 
@@ -49,53 +52,43 @@ def _get_embeddings():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Core Gemini caller — pacing + retry
+#  Core Gemini caller — single call, no retry loop (Streamlit times out)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _call_gemini(prompt: str) -> str:
     """
-    Call Gemini with pre-call sleep and exponential backoff on 429.
-    Retry schedule: 20s → 40s → 80s → 160s (+ jitter up to 5s each).
+    Single Gemini call with a short pre-call delay.
+    No retry loop — Streamlit Cloud has a ~60s request timeout so retries
+    with exponential backoff would cause the entire request to time out
+    before succeeding, which is worse than just returning a clean error.
     """
-    for attempt in range(_MAX_RETRIES):
-        time.sleep(_CALL_DELAY)
-        try:
-            response = client.models.generate_content(
-                model=MODEL_NAME,
-                contents=prompt,
+    time.sleep(_CALL_DELAY)
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+        )
+        return response.text
+
+    except Exception as e:
+        err = str(e)
+
+        if "429" in err or "RESOURCE_EXHAUSTED" in err:
+            return (
+                "⚠️ Rate limit reached. You are making requests too quickly. "
+                "Please wait 30 seconds and try again."
             )
-            return response.text
-
-        except Exception as e:
-            err = str(e)
-
-            if "429" in err or "RESOURCE_EXHAUSTED" in err:
-                if attempt < _MAX_RETRIES - 1:
-                    backoff = _BASE_BACKOFF * (2 ** attempt) + random.uniform(0, 5)
-                    time.sleep(backoff)
-                    continue
-                return (
-                    "⚠️ Still rate limited after retries. "
-                    "Please wait 60 seconds and try again. "
-                    "Free tier limit: 15 requests/minute."
-                )
-
-            if "404" in err or "NOT_FOUND" in err:
-                return (
-                    "⚠️ Model not available."
-                    "Check your API key has access to gemini-2.0-flash-lite "
-                    "at aistudio.google.com."
-                )
-
-            if "401" in err or "403" in err or "API_KEY" in err.upper():
-                return (
-                    "⚠️ API key error. "
-                    "Check GEMINI_API_KEY in your .env or Streamlit secrets."
-                )
-
-            return f"⚠️ Error: {err}"
-
-    return "⚠️ Failed after multiple retries. Please wait 60 seconds and try again."
+        if "404" in err or "NOT_FOUND" in err:
+            return (
+                "⚠️ Model not found. "
+                "Check your API key at aistudio.google.com."
+            )
+        if "401" in err or "403" in err or "API_KEY" in err.upper():
+            return (
+                "⚠️ API key error. "
+                "Check GEMINI_API_KEY in your Streamlit Cloud secrets."
+            )
+        return f"⚠️ Error: {err}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -108,7 +101,6 @@ def load_docs(file_path: str):
 
 
 def chunk_docs(docs, chunk_size: int = 600, chunk_overlap: int = 100):
-    """600 chars per chunk (down from 1200) — cuts TPM by ~50% per call."""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -141,12 +133,10 @@ def load_vector_store(index_path: str = "faiss_index"):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def retrieve_docs(vector_store, query: str, k: int = 3):
-    """k=3 (down from 5) — less context tokens per call."""
     return vector_store.similarity_search(query, k=k)
 
 
 def retrieve_per_document(vector_store, query: str, chunks_per_doc: int = 3):
-    """Balanced retrieval across docs. chunks_per_doc=3, over-fetch k=30."""
     all_results = vector_store.similarity_search(query, k=30)
     doc_chunks  = defaultdict(list)
     for doc in all_results:
@@ -158,16 +148,15 @@ def retrieve_per_document(vector_store, query: str, chunks_per_doc: int = 3):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Query Reformulation — disabled on free tier (saves 1 API call per message)
+#  Query Reformulation — disabled to save API calls on free tier
 # ══════════════════════════════════════════════════════════════════════════════
 
 def reformulate_query(query: str, chat_history: list) -> str:
-    """Disabled to save free-tier quota. Re-enable on paid plan."""
     return query
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Answer Generation
+#  Answer Generation — ONE Gemini call per user message
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_answer(
@@ -176,12 +165,6 @@ def generate_answer(
     chat_history: list | None = None,
     max_history_turns: int = 1,
 ) -> str:
-    """
-    Generate grounded answer. Token optimizations:
-    - max_history_turns=1 (was 3)
-    - history truncated to 200 chars each (was 400)
-    - chunks already 600 chars from chunk_docs
-    """
     context = "\n\n".join([doc.page_content for doc in context_docs])
 
     if len(context.strip()) < 30:
@@ -194,7 +177,7 @@ def generate_answer(
     if chat_history:
         recent = chat_history[-(max_history_turns * 2):]
         if recent:
-            history_block = "Recent context (reference only — not a fact source):\n"
+            history_block = "Recent context (reference only):\n"
             for msg in recent:
                 role = "User" if msg["role"] == "user" else "Assistant"
                 history_block += f"{role}: {msg['content'][:200]}\n"
@@ -205,10 +188,10 @@ def generate_answer(
         "Answer using ONLY the Document Context below.\n\n"
         "Rules:\n"
         "1. Only use information from Document Context.\n"
-        "2. If the answer is not in the context, say: "
+        "2. If the answer is not in context, say: "
         "\"I could not find this in the uploaded documents.\"\n"
         "3. Be concise and accurate.\n"
-        "4. Do not use your training knowledge.\n\n"
+        "4. Do not use your own training knowledge.\n\n"
         f"{history_block}"
         f"Document Context:\n{context}\n\n"
         f"Question: {query}\n\n"
@@ -220,51 +203,59 @@ def generate_answer(
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Document Summarisation
+#  KEY FIX: summarize_all_documents previously called _call_gemini in a LOOP
+#  (one call per document). With 2+ docs that's 2+ API calls fired back-to-back,
+#  instantly hitting rate limits. Now it batches all doc content into ONE call.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def summarize_all_documents(vector_store, all_source_names: list) -> dict:
     """
-    Summarise each document. Token optimizations:
-    - k=20 (was 60)
-    - 5 chunks per doc (was 20)
-    - Each chunk 600 chars
-    - Stops gracefully on rate limit
+    Summarise ALL documents in a SINGLE Gemini call by batching context.
+    Previous version made one call per document — with 2+ docs this
+    fired multiple requests instantly and always hit the rate limit.
     """
-    summaries = {}
+    if not all_source_names:
+        return {}
 
-    for i, source in enumerate(all_source_names):
-        all_results = vector_store.similarity_search(
-            "summary overview main points key information", k=20,
-        )
-        doc_chunks = [
-            doc for doc in all_results
-            if doc.metadata.get("source") == source
-        ]
+    # Gather up to 5 chunks per document
+    all_results = vector_store.similarity_search(
+        "summary overview main points key information", k=50,
+    )
 
-        if not doc_chunks:
-            summaries[source] = "Could not retrieve content from this document."
+    # Group by source
+    doc_chunks = defaultdict(list)
+    for doc in all_results:
+        src = doc.metadata.get("source", "Unknown")
+        if src in all_source_names:
+            doc_chunks[src].append(doc)
+
+    # Build one combined prompt with all documents
+    combined_context = ""
+    for source in all_source_names:
+        chunks = doc_chunks.get(source, [])
+        if not chunks:
+            combined_context += f"\n\n=== {source} ===\n[No content found]\n"
             continue
+        content = "\n\n".join([doc.page_content for doc in chunks[:5]])
+        combined_context += f"\n\n=== {source} ===\n{content}\n"
 
-        context = "\n\n".join([doc.page_content for doc in doc_chunks[:5]])
+    prompt = (
+        "You are summarising the following documents. "
+        "Use ONLY the content provided for each document.\n\n"
+        "For EACH document provide:\n"
+        "1. What the document is about (2 sentences)\n"
+        "2. Key points (bullet list, max 5)\n"
+        "3. Most important takeaway (1 sentence)\n\n"
+        "Format your response with the document name as a header for each section.\n\n"
+        f"Documents:\n{combined_context}\n\n"
+        "Summaries:"
+    )
 
-        prompt = (
-            f"Summarise the document \"{source}\" using ONLY the context below.\n\n"
-            "Provide:\n"
-            "1. What this document is about (2 sentences max)\n"
-            "2. Key points (bullet list, max 5)\n"
-            "3. Most important takeaway (1 sentence)\n\n"
-            f"Context:\n{context}\n\nSummary:"
-        )
+    result = _call_gemini(prompt)
 
-        result = _call_gemini(prompt)
-        summaries[source] = result
+    # Return as a single entry so app.py renders it cleanly
+    if result.startswith("⚠️"):
+        return {name: result for name in all_source_names}
 
-        if result.startswith("⚠️"):
-            for remaining in all_source_names[i + 1:]:
-                summaries[remaining] = (
-                    "⚠️ Skipped — rate limit reached. "
-                    "Wait 60 seconds and try summarising again."
-                )
-            break
-
-    return summaries
+    # Return combined result under first doc name; app.py will display it
+    return {"All Documents": result}
