@@ -1,6 +1,6 @@
 """
-app.py  —  AI Support Copilot
-Premium dark-gold UI. Rate-limit safe version.
+app.py — AI Support Copilot
+Premium dark-gold UI. Clean spinner text. Rate-limit safe.
 """
 
 import datetime, glob, os, pickle, shutil, uuid
@@ -12,13 +12,11 @@ from rag_pipeline import (
     reformulate_query, generate_answer, summarize_all_documents,
 )
 
-# ── Cleanup stray temp PDFs ────────────────────────────────────────────────────
 for f in glob.glob("*.pdf"):
     if "-" in f:
         try: os.remove(f)
         except: pass
 
-# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="CopilotAI — Enterprise Intelligence",
     page_icon="🤖",
@@ -26,9 +24,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  CSS
-# ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Instrument+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -100,7 +95,6 @@ html, body,
 [data-testid="stSidebar"] details > summary { list-style: none !important; }
 [data-testid="stSidebar"] [data-testid="stExpanderToggleIcon"] { display: none !important; }
 
-/* File uploader — fix duplicate upload text */
 [data-testid="stSidebar"] .stFileUploader button span { display: none !important; }
 [data-testid="stSidebar"] .stFileUploader button::after {
   content: "↑ Upload PDFs";
@@ -122,7 +116,6 @@ html, body,
 [data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] *,
 [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] > div { display: none !important; }
 
-/* Metric tiles */
 [data-testid="stSidebar"] [data-testid="stMetric"] {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -142,7 +135,6 @@ html, body,
   white-space: normal !important;
 }
 
-/* Checkboxes */
 [data-testid="stSidebar"] .stCheckbox {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -169,7 +161,6 @@ html, body,
 [data-testid="stSidebar"] .stCheckbox:has(input:checked) label { color: var(--gold) !important; }
 [data-testid="stSidebar"] .stCheckbox input[type="checkbox"] { accent-color: var(--gold) !important; }
 
-/* Sidebar buttons */
 [data-testid="stSidebar"] .stButton > button {
   width: 100% !important;
   background: transparent !important;
@@ -187,7 +178,6 @@ html, body,
   background: var(--gold-bg) !important;
 }
 
-/* File uploader container */
 [data-testid="stSidebar"] .stFileUploader > div {
   background: var(--gold-bg) !important;
   border: 1px dashed var(--gold-border) !important;
@@ -196,7 +186,6 @@ html, body,
 }
 [data-testid="stSidebar"] .stFileUploader label { color: var(--gold) !important; }
 
-/* Download button */
 [data-testid="stSidebar"] .stDownloadButton > button {
   width: 100% !important;
   background: transparent !important;
@@ -214,7 +203,6 @@ html, body,
   background: var(--gold-bg) !important;
 }
 
-/* Expander */
 [data-testid="stSidebar"] .stExpander {
   background: var(--surface) !important;
   border: 1px solid var(--border) !important;
@@ -222,7 +210,6 @@ html, body,
 }
 [data-testid="stSidebar"] hr { border-color: var(--border) !important; margin: 8px 0 !important; }
 
-/* Status badge */
 .sb-status {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 10px; font-family: var(--f-mono);
@@ -238,7 +225,6 @@ html, body,
 }
 @keyframes hb { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.3;transform:scale(.8)} }
 
-/* Scope pill */
 .scope-pill {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 10px; font-family: var(--f-mono);
@@ -246,7 +232,6 @@ html, body,
   color: var(--gold); border-radius: 100px; padding: 3px 10px;
 }
 
-/* Quality card */
 .sb-quality {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px;
@@ -260,7 +245,6 @@ html, body,
 .sb-qm-num { font-family: var(--f-brand) !important; font-size: 20px !important; font-weight: 600; line-height: 1.1; }
 .sb-qm-lbl { font-size: 8.5px !important; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255,255,255,0.2) !important; font-family: var(--f-mono) !important; margin-top: 2px; }
 
-/* ─── Main ───────────────────────────────────────────────────────── */
 [data-testid="stMain"] { background: var(--base) !important; }
 .block-container { padding: 0 !important; max-width: 100% !important; }
 
@@ -269,10 +253,9 @@ html, body,
   display: flex; align-items: center; padding: 0 40px; gap: 12px;
   background: var(--base); flex-wrap: wrap;
 }
-.tb-crumb  { font-size: 12px; color: var(--text-2); font-family: var(--f-mono); }
-.tb-sep    { width: 1px; height: 14px; background: var(--border); flex-shrink: 0; }
+.tb-crumb { font-size: 12px; color: var(--text-2); font-family: var(--f-mono); }
+.tb-sep   { width: 1px; height: 14px; background: var(--border); flex-shrink: 0; }
 
-/* ─── Chat ───────────────────────────────────────────────────────── */
 .chat-pad { padding: 32px 40px 12px; max-width: 820px; margin: 0 auto; }
 .date-sep { display:flex; align-items:center; gap:12px; margin-bottom:24px; }
 .ds-line  { flex:1; height:1px; background:var(--border); }
@@ -351,7 +334,6 @@ html, body,
   background: var(--elevated) !important; border: 1px solid var(--border) !important; border-radius: 8px !important;
 }
 
-/* ─── Onboarding ─────────────────────────────────────────────────── */
 .ob-card {
   background: linear-gradient(145deg, #131519 0%, #181b22 100%);
   border: 1px solid var(--gold-border); border-radius: 14px;
@@ -440,7 +422,7 @@ def truncate(s, n=22):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  AUTO-LOAD persisted index
+#  AUTO-LOAD
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.vector_store is None:
     saved = load_doc_chunks()
@@ -461,7 +443,6 @@ with st.sidebar:
     n_queries = len([m for m in st.session_state.messages if m["role"] == "user"])
     sel       = st.session_state.selected_docs
 
-    # ── Brand ──────────────────────────────────────────────────────────────────
     st.markdown(f"""
     <div style="padding:20px 0 16px">
       <div style="display:flex;align-items:center;gap:10px">
@@ -488,20 +469,17 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Upload ─────────────────────────────────────────────────────────────────
     st.caption("Upload Documents")
     uploaded_files = st.file_uploader(
         "", type="pdf", accept_multiple_files=True, label_visibility="collapsed"
     )
 
-    # ── Stats ──────────────────────────────────────────────────────────────────
     c1, c2 = st.columns(2)
     c1.metric("Documents", n_docs)
     c2.metric("Queries",   n_queries)
 
     st.divider()
 
-    # ── Document scope selector ─────────────────────────────────────────────────
     if st.session_state.source_names:
         st.caption("Active Document Scope")
         new_sel = list(st.session_state.selected_docs)
@@ -529,7 +507,6 @@ with st.sidebar:
                 st.session_state.selected_docs = []
                 st.rerun()
 
-    # ── Quality metrics ─────────────────────────────────────────────────────────
     st.divider()
     st.caption("Response Quality")
     helpful   = sum(1 for m in st.session_state.messages if m.get("feedback") == "helpful")
@@ -546,7 +523,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Manage docs ─────────────────────────────────────────────────────────────
     if st.session_state.source_names:
         with st.expander("🗂️ Manage Documents"):
             for name in list(st.session_state.source_names):
@@ -578,7 +554,6 @@ with st.sidebar:
                     elif os.path.isfile(p): os.remove(p)
                 st.rerun()
 
-    # ── Export ──────────────────────────────────────────────────────────────────
     if st.session_state.messages:
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
         st.download_button(
@@ -760,9 +735,7 @@ if len(sel) > 3:
     sel_str += f" +{len(sel)-3} more"
 
 st.markdown(
-    f'<div class="input-hint">'
-    f'Searching: {sel_str} · Gemini 2.0 Flash · rate-limit safe'
-    f'</div>',
+    f'<div class="input-hint">Searching: {sel_str}</div>',
     unsafe_allow_html=True,
 )
 
@@ -771,9 +744,9 @@ query = st.chat_input("Ask anything about your documents…")
 if query:
     st.session_state.messages.append({"role": "user", "content": query})
 
-    with st.spinner("Thinking… (4s pacing applied between API calls)"):
+    with st.spinner("Thinking…"):
         hist = st.session_state.messages[:-1]
-        ref  = reformulate_query(query, hist)   # returns query unchanged on free tier
+        ref  = reformulate_query(query, hist)
 
         ql = query.lower()
 
@@ -800,11 +773,11 @@ if query:
             conf     = min(len(ctx_docs) * 33, 100)
 
     st.session_state.messages.append({
-        "role":         "assistant",
-        "content":      answer,
-        "sources":      srcs,
-        "confidence":   conf,
-        "feedback":     None,
+        "role":       "assistant",
+        "content":    answer,
+        "sources":    srcs,
+        "confidence": conf,
+        "feedback":   None,
         "reformulated": None,
     })
     st.rerun()
