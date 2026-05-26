@@ -499,7 +499,7 @@ with st.sidebar:
 
     st.divider()
 
-        if st.session_state.source_names:
+            if st.session_state.source_names:
         st.caption("Active Document Scope")
 
         new_sel = list(st.session_state.selected_docs)
