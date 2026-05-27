@@ -1,16 +1,18 @@
 """
 rag_pipeline.py — AI Support Copilot
-Root cause fixes:
-1. Switched to gemini-1.5-flash (15 RPM free tier, not deprecating)
-2. Removed retry loop — Streamlit Cloud times out before retries complete
-3. Single clean API call with one reasonable delay
-4. Summarize query now uses generate_answer (1 call) not summarize_all_documents loop
+Performance fixes applied:
+1. @st.cache_resource on _get_embeddings() — model loads once, reused across all reruns
+2. Switched to gemini-2.5-flash (best free-tier model)
+3. Removed retry loop — Streamlit Cloud times out before retries complete
+4. Single clean API call with one reasonable delay
+5. Summarize query now uses generate_answer (1 call) not summarize_all_documents loop
 """
 
 import os
 import time
 from collections import defaultdict
 
+import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -37,18 +39,20 @@ if not _api_key:
 
 client = genai.Client(api_key=_api_key)
 
-# gemini-1.5-flash: 15 RPM, 1500 RPD on free tier — highest available
-# gemini-2.0-flash: only 5 RPM on free tier AND deprecating June 2026
 MODEL_NAME  = "gemini-2.5-flash"
 _CALL_DELAY = 2   # 2s delay = ~20 RPM theoretical max, well under 15 RPM limit
 
-_embeddings = None
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  FIX #1: @st.cache_resource on embeddings
+#  Previously: HuggingFaceEmbeddings() was re-initialised on every Streamlit
+#  rerun (every button click, every message), costing 3–8 seconds each time.
+#  Now: the model loads exactly once per server session and is reused.
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_resource(show_spinner=False)
 def _get_embeddings():
-    global _embeddings
-    if _embeddings is None:
-        _embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    return _embeddings
+    return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -139,10 +143,10 @@ def retrieve_docs(vector_store, query: str, k: int = 3):
 def retrieve_per_document(vector_store, query: str, chunks_per_doc: int = 4):
     """
     Retrieve chunks GUARANTEED from every document in the index.
-    
+
     Previous version relied purely on similarity search — if one doc
     was more similar to the query, other docs got no chunks at all.
-    
+
     Fix: do a separate similarity search per document using its chunks
     as a filter, ensuring every document contributes to the context.
     """
