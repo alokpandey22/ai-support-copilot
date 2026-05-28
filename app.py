@@ -2,17 +2,15 @@
 app.py — AI Support Copilot
 Premium dark-gold UI. Clean spinner text. Rate-limit safe.
 
-Performance fixes applied:
-1. _startup_cleanup() wrapped in @st.cache_resource — glob scan runs once, not every rerun
-2. rebuild_vs() wrapped in @st.cache_resource — vector store rebuilt only when doc set changes
-3. build_scoped_vs() wrapped in @st.cache_resource — scoped VS cached per selection tuple
-4. Google Fonts @import uses &display=swap — text paints immediately with fallback font
-
-Privacy fix:
-5. Removed ALL disk persistence (doc_chunks.pkl, faiss_index) — documents now live in
-   session state only. Previously, save_doc_chunks() wrote to a single shared file on the
-   server, so every new visitor auto-loaded every other user's uploaded documents.
-   Now each user gets a completely isolated, private session.
+Fixes applied in this version:
+1. PRIVACY FIX: Removed @st.cache_resource from rebuild_vs() and build_scoped_vs()
+   — cache_resource is SERVER-GLOBAL in Streamlit, meaning cached chunk data was
+   shared across all user sessions. Now vector stores are built per-session and
+   stored in st.session_state only.
+2. BUG FIX: selected_docs now always stays in sync — on upload, docs are added
+   to selected_docs before rerun so the chat interface never shows "No documents selected."
+3. _startup_cleanup() still uses @st.cache_resource (safe — it only touches temp files,
+   no user data).
 """
 
 import datetime, glob, os, shutil, uuid, hashlib, json
@@ -26,7 +24,8 @@ from rag_pipeline import (
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  FIX #1: Startup cleanup — runs ONCE per server session, not on every rerun
+#  Startup cleanup — runs ONCE per server session, not on every rerun
+#  Safe to cache globally: only removes temp PDF files, touches no user data
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_resource(show_spinner=False)
@@ -427,54 +426,40 @@ button[kind="header"] svg {
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SESSION STATE
+#  All document data lives here — completely isolated per browser session.
+#  No @st.cache_resource for user data (that's server-global and shared).
 # ══════════════════════════════════════════════════════════════════════════════
 for k, v in {
-    "vector_store":   None,
+    "vector_store":   None,   # FAISS index — per session, never shared
     "uploaded_count": 0,
     "messages":       [],
-    "source_names":   [],
-    "doc_chunks":     {},
+    "source_names":   [],     # list of doc display names this user uploaded
+    "doc_chunks":     {},     # {display_name: [chunk, ...]} — per session only
     "query_log":      [],
-    "selected_docs":  [],
+    "selected_docs":  [],     # which docs are active for querying
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
-
-# PRIVACY FIX: save_doc_chunks and load_doc_chunks have been removed entirely.
-# They wrote/read a shared doc_chunks.pkl file on the server, causing all users
-# to see each other's uploaded documents. All document state now lives in
-# st.session_state only, which is isolated per browser session.
-
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  FIX #2: Cache the vector store rebuild
-#  Keyed to a hash of doc names so it only rebuilds when documents change.
-#  PRIVACY FIX: removed vs.save_local() — no longer writes shared faiss_index.
+#  VECTOR STORE HELPERS
+#  NOT cached with @st.cache_resource — that decorator is server-global and
+#  would expose one user's document chunks to other users' sessions.
+#  Vector stores are built in-session and stored in st.session_state.
 # ══════════════════════════════════════════════════════════════════════════════
 
-@st.cache_resource(show_spinner=False)
-def rebuild_vs(_doc_chunks_hash: str, dc: dict):
+def rebuild_vs(dc: dict):
+    """Build a fresh FAISS vector store from all session doc chunks."""
     chunks = [c for cs in dc.values() for c in cs]
     if not chunks:
         return None
-    return create_vector_store(chunks)   # no save_local — stays in memory only
+    return create_vector_store(chunks)
 
 
-def _chunks_hash(dc: dict) -> str:
-    return hashlib.md5(json.dumps(sorted(dc.keys())).encode()).hexdigest()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  FIX #3: Cache the scoped vector store per selected-doc tuple
-# ══════════════════════════════════════════════════════════════════════════════
-
-@st.cache_resource(show_spinner=False)
-def build_scoped_vs(selected_tuple: tuple, _doc_chunks: dict):
-    chunks = [c for name in selected_tuple for c in _doc_chunks.get(name, [])]
+def build_scoped_vs(selected: list, doc_chunks: dict):
+    """Build a FAISS vector store from only the selected documents."""
+    chunks = [c for name in selected for c in doc_chunks.get(name, [])]
     if not chunks:
         return None
     return create_vector_store(chunks)
@@ -502,10 +487,17 @@ def truncate(s, n=22):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  NO AUTO-LOAD — documents live in session state only (privacy fix)
-#  The previous auto-load block read doc_chunks.pkl here and populated every
-#  new visitor's session with all previously uploaded documents. Removed.
+#  PROCESS UPLOADS
+#  Runs before sidebar render so source_names is up-to-date when sidebar draws.
+#  BUG FIX: selected_docs is updated HERE (before rerun) so the chat interface
+#  always sees documents as selected immediately after upload.
 # ══════════════════════════════════════════════════════════════════════════════
+uploaded_files = None   # declared here; widget rendered inside sidebar below
+
+# We process uploads after the sidebar widget is rendered (see below).
+# Using a flag to avoid processing twice.
+if "pending_uploads" not in st.session_state:
+    st.session_state.pending_uploads = []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -622,9 +614,7 @@ with st.sidebar:
                         d for d in st.session_state.selected_docs if d != name
                     ]
                     if st.session_state.doc_chunks:
-                        dc = st.session_state.doc_chunks
-                        st.session_state.vector_store = rebuild_vs(_chunks_hash(dc), dc)
-                        # PRIVACY FIX: save_doc_chunks(dc) removed — no shared disk writes
+                        st.session_state.vector_store = rebuild_vs(st.session_state.doc_chunks)
                     else:
                         st.session_state.vector_store = None
                     st.rerun()
@@ -649,29 +639,44 @@ with st.sidebar:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PROCESS UPLOADS
+#  PROCESS UPLOADS (after sidebar widget is rendered)
+#  BUG FIX: selected_docs is populated here, before st.rerun(), so the very
+#  first rerun after upload always has documents selected and shows the chat UI.
 # ══════════════════════════════════════════════════════════════════════════════
 if uploaded_files:
+    any_new = False
     temps = []
     for uf in uploaded_files:
-        uname = f"{uuid.uuid4()}_{uf.name}"; temps.append(uname)
-        with open(uname, "wb") as f: f.write(uf.read())
+        # Skip duplicates already in this session
+        if uf.name in st.session_state.source_names:
+            continue
+        uname = f"{uuid.uuid4()}_{uf.name}"
+        temps.append(uname)
+        with open(uname, "wb") as f:
+            f.write(uf.read())
         docs   = load_docs(uname)
         chunks = chunk_docs(docs)
         if not chunks:
-            st.warning(f"⚠️ Skipped '{uf.name}' — no text found."); continue
-        for c in chunks: c.metadata["source"] = uf.name
-        st.session_state.doc_chunks[uf.name] = chunks
-        if uf.name not in st.session_state.source_names:
-            st.session_state.source_names.append(uf.name)
+            st.warning(f"⚠️ Skipped '{uf.name}' — no text found.")
+            continue
+        for c in chunks:
+            c.metadata["source"] = uf.name
+        st.session_state.doc_chunks[uf.name]  = chunks
+        st.session_state.source_names.append(uf.name)
+        # KEY FIX: add to selected_docs immediately so chat UI is visible after rerun
+        if uf.name not in st.session_state.selected_docs:
             st.session_state.selected_docs.append(uf.name)
+        any_new = True
+
     for t in temps:
-        try: os.remove(t)
-        except: pass
-    if st.session_state.doc_chunks:
-        dc = st.session_state.doc_chunks
-        st.session_state.vector_store   = rebuild_vs(_chunks_hash(dc), dc)
-        # PRIVACY FIX: save_doc_chunks(dc) removed — no shared disk writes
+        try:
+            os.remove(t)
+        except Exception:
+            pass
+
+    if any_new and st.session_state.doc_chunks:
+        # Rebuild vector store in session state — never written to disk or cache
+        st.session_state.vector_store   = rebuild_vs(st.session_state.doc_chunks)
         st.session_state.uploaded_count = len(st.session_state.source_names)
         st.session_state.messages = []
         st.rerun()
@@ -679,15 +684,18 @@ if uploaded_files:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  RESOLVE ACTIVE VECTOR STORE
+#  Build scoped VS on-the-fly from session state — no cross-session caching.
 # ══════════════════════════════════════════════════════════════════════════════
 sel       = st.session_state.selected_docs
 all_names = st.session_state.source_names
 
 if sel and set(sel) == set(all_names):
+    # All docs selected — use the pre-built full vector store
     active_vs    = st.session_state.vector_store
     active_names = all_names
 elif sel:
-    active_vs    = build_scoped_vs(tuple(sorted(sel)), st.session_state.doc_chunks)
+    # Subset selected — build a scoped store from session chunks only
+    active_vs    = build_scoped_vs(sel, st.session_state.doc_chunks)
     active_names = sel
 else:
     active_vs    = None
