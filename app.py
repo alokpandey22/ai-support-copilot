@@ -2,18 +2,21 @@
 app.py — AI Support Copilot
 Premium dark-gold UI. Clean spinner text. Rate-limit safe.
 
-Fixes applied in this version:
-1. PRIVACY FIX: Removed @st.cache_resource from rebuild_vs() and build_scoped_vs()
-   — cache_resource is SERVER-GLOBAL in Streamlit, meaning cached chunk data was
-   shared across all user sessions. Now vector stores are built per-session and
-   stored in st.session_state only.
-2. BUG FIX: selected_docs now always stays in sync — on upload, docs are added
-   to selected_docs before rerun so the chat interface never shows "No documents selected."
-3. _startup_cleanup() still uses @st.cache_resource (safe — it only touches temp files,
-   no user data).
+Privacy & session-isolation guarantees:
+- All document data (chunks, vector stores, names) lives in st.session_state ONLY.
+- No @st.cache_resource on any user-data function — that decorator is server-global
+  and would expose one user's documents to every other session.
+- Each browser tab / user gets a completely fresh, isolated session_state.
+- Documents uploaded by User A are NEVER visible to User B.
+
+Bug fixes vs previous version:
+1. PRIVACY FIX: rebuild_vs() / build_scoped_vs() are plain functions — no cache.
+2. SYNC FIX: selected_docs updated BEFORE st.rerun() so chat UI shows immediately.
+3. RENDER FIX: gate on session_state keys directly (not just vector_store) so the
+   onboarding card and chat pane render correctly in every state.
 """
 
-import datetime, glob, os, shutil, uuid, hashlib, json
+import datetime, glob, os, shutil, uuid, hashlib
 import streamlit as st
 
 from rag_pipeline import (
@@ -24,8 +27,8 @@ from rag_pipeline import (
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Startup cleanup — runs ONCE per server session, not on every rerun
-#  Safe to cache globally: only removes temp PDF files, touches no user data
+#  Startup cleanup — runs ONCE per server boot, safe to cache globally
+#  (only removes stale temp PDF files, touches no user data)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_resource(show_spinner=False)
@@ -96,7 +99,6 @@ html, body,
   left: 12px !important;
   z-index: 999 !important;
 }
-
 [data-testid="stSidebarCollapsedControl"] button {
   background: var(--surface) !important;
   border: 1px solid var(--gold-border) !important;
@@ -105,7 +107,6 @@ html, body,
   width: 34px !important;
   height: 34px !important;
 }
-
 [data-testid="stSidebarCollapsedControl"] button:hover {
   background: var(--gold-bg) !important;
 }
@@ -124,15 +125,12 @@ button[kind="header"] {
   height: 34px !important;
   transition: all 0.18s ease !important;
 }
-
 button[kind="header"]:hover {
   border-color: var(--gold-border) !important;
   background: var(--gold-bg) !important;
 }
+button[kind="header"] svg { fill: var(--gold) !important; }
 
-button[kind="header"] svg {
-  fill: var(--gold) !important;
-}
 [data-testid="stSidebar"] section[data-testid="stSidebarContent"] {
   padding: 1rem 1rem 2rem !important;
   gap: 0.5rem !important;
@@ -425,44 +423,38 @@ button[kind="header"] svg {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SESSION STATE
-#  All document data lives here — completely isolated per browser session.
-#  No @st.cache_resource for user data (that's server-global and shared).
+#  SESSION STATE — all user data lives HERE, never in cache_resource
+#  Each browser session (tab/user) gets its own completely separate copy.
+#  There is zero possibility of one user seeing another user's documents.
 # ══════════════════════════════════════════════════════════════════════════════
-for k, v in {
-    "vector_store":   None,   # FAISS index — per session, never shared
+_DEFAULTS = {
+    "vector_store":   None,   # FAISS index — per session
     "uploaded_count": 0,
     "messages":       [],
-    "source_names":   [],     # list of doc display names this user uploaded
-    "doc_chunks":     {},     # {display_name: [chunk, ...]} — per session only
+    "source_names":   [],     # ordered list of doc display names
+    "doc_chunks":     {},     # {display_name: [chunk, ...]}
     "query_log":      [],
-    "selected_docs":  [],     # which docs are active for querying
-}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+    "selected_docs":  [],     # which docs are checked for querying
+}
+for _k, _v in _DEFAULTS.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  VECTOR STORE HELPERS
-#  NOT cached with @st.cache_resource — that decorator is server-global and
-#  would expose one user's document chunks to other users' sessions.
-#  Vector stores are built in-session and stored in st.session_state.
+#  VECTOR STORE HELPERS — plain functions, never @st.cache_resource
 # ══════════════════════════════════════════════════════════════════════════════
 
 def rebuild_vs(dc: dict):
-    """Build a fresh FAISS vector store from all session doc chunks."""
+    """Build a FAISS store from all doc chunks in this session."""
     chunks = [c for cs in dc.values() for c in cs]
-    if not chunks:
-        return None
-    return create_vector_store(chunks)
+    return create_vector_store(chunks) if chunks else None
 
 
 def build_scoped_vs(selected: list, doc_chunks: dict):
-    """Build a FAISS vector store from only the selected documents."""
+    """Build a FAISS store from only the selected doc chunks."""
     chunks = [c for name in selected for c in doc_chunks.get(name, [])]
-    if not chunks:
-        return None
-    return create_vector_store(chunks)
+    return create_vector_store(chunks) if chunks else None
 
 
 def export_txt(msgs):
@@ -479,6 +471,7 @@ def export_txt(msgs):
         lines.append("")
     return "\n".join(lines)
 
+
 GEM = ('<svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
        '<path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>')
 
@@ -487,21 +480,98 @@ def truncate(s, n=22):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PROCESS UPLOADS
-#  Runs before sidebar render so source_names is up-to-date when sidebar draws.
-#  BUG FIX: selected_docs is updated HERE (before rerun) so the chat interface
-#  always sees documents as selected immediately after upload.
+#  UPLOAD PROCESSING
+#  ─ Happens BEFORE the sidebar is rendered so source_names is already up-to-date.
+#  ─ We use a hidden file_uploader key approach: render the widget first via a
+#    placeholder, then process. To keep ordering correct we process with a
+#    dedicated key and check against already-known names.
+#
+#  Privacy model (explained):
+#  ─ st.session_state is per-browser-session. Two users on the same Streamlit
+#    server each have their own session_state dict in memory. They cannot see
+#    each other's keys or values.
+#  ─ We write temp files with uuid prefixes and delete them immediately after
+#    loading, so there is no on-disk leakage between sessions either.
 # ══════════════════════════════════════════════════════════════════════════════
-uploaded_files = None   # declared here; widget rendered inside sidebar below
 
-# We process uploads after the sidebar widget is rendered (see below).
-# Using a flag to avoid processing twice.
-if "pending_uploads" not in st.session_state:
-    st.session_state.pending_uploads = []
+# Render upload widget (sidebar rendered below). We capture the return value
+# here so processing runs top-to-bottom before the sidebar draws.
+with st.sidebar:
+    _uploaded_files = st.file_uploader(
+        "", type="pdf", accept_multiple_files=True,
+        label_visibility="collapsed",
+        key="file_uploader_widget",
+    )
+
+# ── Process any newly uploaded files ────────────────────────────────────────
+if _uploaded_files:
+    _any_new = False
+    _temps   = []
+
+    for uf in _uploaded_files:
+        # Skip files this session already knows about
+        if uf.name in st.session_state.source_names:
+            continue
+
+        # Write to a unique temp path so concurrent sessions never collide
+        _tmp = f"{uuid.uuid4()}_{uf.name}"
+        _temps.append(_tmp)
+        with open(_tmp, "wb") as fh:
+            fh.write(uf.read())
+
+        _docs   = load_docs(_tmp)
+        _chunks = chunk_docs(_docs)
+
+        if not _chunks:
+            st.warning(f"⚠️ Skipped '{uf.name}' — no extractable text found.")
+            continue
+
+        for c in _chunks:
+            c.metadata["source"] = uf.name
+
+        # Store entirely in THIS session's state — invisible to all other sessions
+        st.session_state.doc_chunks[uf.name]  = _chunks
+        st.session_state.source_names.append(uf.name)
+
+        # Auto-select the new document immediately (fixes "No documents selected" flash)
+        if uf.name not in st.session_state.selected_docs:
+            st.session_state.selected_docs.append(uf.name)
+
+        _any_new = True
+
+    # Delete temp files immediately — no cross-session data leakage on disk
+    for _t in _temps:
+        try:
+            os.remove(_t)
+        except Exception:
+            pass
+
+    if _any_new and st.session_state.doc_chunks:
+        st.session_state.vector_store   = rebuild_vs(st.session_state.doc_chunks)
+        st.session_state.uploaded_count = len(st.session_state.source_names)
+        st.session_state.messages       = []   # fresh conversation for new docs
+        st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SIDEBAR
+#  RESOLVE ACTIVE VECTOR STORE (per-query scoping, all in session)
+# ══════════════════════════════════════════════════════════════════════════════
+_sel       = st.session_state.selected_docs
+_all_names = st.session_state.source_names
+
+if _sel and set(_sel) == set(_all_names):
+    active_vs    = st.session_state.vector_store
+    active_names = _all_names
+elif _sel:
+    active_vs    = build_scoped_vs(_sel, st.session_state.doc_chunks)
+    active_names = _sel
+else:
+    active_vs    = None
+    active_names = []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SIDEBAR — rendered after upload processing so counts are correct
 # ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     n_docs    = len(st.session_state.source_names)
@@ -533,10 +603,13 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.divider()
-
     st.caption("Upload Documents")
-    uploaded_files = st.file_uploader(
-        "", type="pdf", accept_multiple_files=True, label_visibility="collapsed"
+    # Note: the actual file_uploader widget was rendered above (before processing).
+    # We add a small note here so the sidebar layout is clear.
+    st.markdown(
+        '<p style="font-size:9px;color:rgba(255,255,255,0.15);font-family:var(--f-mono);'
+        'margin-top:-6px">Documents exist only for your current session.</p>',
+        unsafe_allow_html=True,
     )
 
     c1, c2 = st.columns(2)
@@ -545,20 +618,19 @@ with st.sidebar:
 
     st.divider()
 
+    # ── Document scope checkboxes ────────────────────────────────────────────
     if st.session_state.source_names:
         st.caption("Active Document Scope")
 
         new_sel = list(st.session_state.selected_docs)
 
         for name in st.session_state.source_names:
-            label = (name[:26] + "…") if len(name) > 27 else name
-
+            label   = (name[:26] + "…") if len(name) > 27 else name
             checked = st.checkbox(
                 label,
                 value=(name in new_sel),
-                key=f"cb_{name}"
+                key=f"cb_{name}",
             )
-
             if checked and name not in new_sel:
                 new_sel.append(name)
             elif not checked and name in new_sel:
@@ -570,23 +642,25 @@ with st.sidebar:
 
         st.write("")
 
-        def select_all_docs():
+        def _select_all():
             st.session_state.selected_docs = list(st.session_state.source_names)
-            for doc in st.session_state.source_names:
-                st.session_state[f"cb_{doc}"] = True
+            for _d in st.session_state.source_names:
+                st.session_state[f"cb_{_d}"] = True
 
-        def clear_all_docs():
+        def _clear_all():
             st.session_state.selected_docs = []
-            for doc in st.session_state.source_names:
-                st.session_state[f"cb_{doc}"] = False
+            for _d in st.session_state.source_names:
+                st.session_state[f"cb_{_d}"] = False
 
-        qa, qb = st.columns(2)
-        with qa:
-            st.button("☑ All",  key="sel_all",  on_click=select_all_docs)
-        with qb:
-            st.button("☐ None", key="sel_none", on_click=clear_all_docs)
+        _qa, _qb = st.columns(2)
+        with _qa:
+            st.button("☑ All",  key="sel_all",  on_click=_select_all)
+        with _qb:
+            st.button("☐ None", key="sel_none", on_click=_clear_all)
 
     st.divider()
+
+    # ── Response quality panel ───────────────────────────────────────────────
     st.caption("Response Quality")
     helpful   = sum(1 for m in st.session_state.messages if m.get("feedback") == "helpful")
     unhelpful = sum(1 for m in st.session_state.messages if m.get("feedback") == "unhelpful")
@@ -602,22 +676,24 @@ with st.sidebar:
 
     st.divider()
 
+    # ── Manage documents expander ────────────────────────────────────────────
     if st.session_state.source_names:
         with st.expander("🗂️ Manage Documents"):
             for name in list(st.session_state.source_names):
-                c1, c2 = st.columns([5, 1])
-                c1.caption(truncate(name, 20))
-                if c2.button("✕", key=f"rm_{name}"):
+                _c1, _c2 = st.columns([5, 1])
+                _c1.caption(truncate(name, 20))
+                if _c2.button("✕", key=f"rm_{name}"):
                     st.session_state.doc_chunks.pop(name, None)
                     st.session_state.source_names.remove(name)
                     st.session_state.selected_docs = [
                         d for d in st.session_state.selected_docs if d != name
                     ]
-                    if st.session_state.doc_chunks:
-                        st.session_state.vector_store = rebuild_vs(st.session_state.doc_chunks)
-                    else:
-                        st.session_state.vector_store = None
+                    st.session_state.vector_store = (
+                        rebuild_vs(st.session_state.doc_chunks)
+                        if st.session_state.doc_chunks else None
+                    )
                     st.rerun()
+
             st.divider()
             if st.button("🗑️ Clear All Documents"):
                 st.session_state.update({
@@ -626,12 +702,13 @@ with st.sidebar:
                 })
                 st.rerun()
 
+    # ── Export ───────────────────────────────────────────────────────────────
     if st.session_state.messages:
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+        _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
         st.download_button(
             "⬇ Download conversation",
             data=export_txt(st.session_state.messages).encode(),
-            file_name=f"copilot_{ts}.txt",
+            file_name=f"copilot_{_ts}.txt",
             mime="text/plain",
         )
     else:
@@ -639,76 +716,12 @@ with st.sidebar:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PROCESS UPLOADS (after sidebar widget is rendered)
-#  BUG FIX: selected_docs is populated here, before st.rerun(), so the very
-#  first rerun after upload always has documents selected and shows the chat UI.
-# ══════════════════════════════════════════════════════════════════════════════
-if uploaded_files:
-    any_new = False
-    temps = []
-    for uf in uploaded_files:
-        # Skip duplicates already in this session
-        if uf.name in st.session_state.source_names:
-            continue
-        uname = f"{uuid.uuid4()}_{uf.name}"
-        temps.append(uname)
-        with open(uname, "wb") as f:
-            f.write(uf.read())
-        docs   = load_docs(uname)
-        chunks = chunk_docs(docs)
-        if not chunks:
-            st.warning(f"⚠️ Skipped '{uf.name}' — no text found.")
-            continue
-        for c in chunks:
-            c.metadata["source"] = uf.name
-        st.session_state.doc_chunks[uf.name]  = chunks
-        st.session_state.source_names.append(uf.name)
-        # KEY FIX: add to selected_docs immediately so chat UI is visible after rerun
-        if uf.name not in st.session_state.selected_docs:
-            st.session_state.selected_docs.append(uf.name)
-        any_new = True
-
-    for t in temps:
-        try:
-            os.remove(t)
-        except Exception:
-            pass
-
-    if any_new and st.session_state.doc_chunks:
-        # Rebuild vector store in session state — never written to disk or cache
-        st.session_state.vector_store   = rebuild_vs(st.session_state.doc_chunks)
-        st.session_state.uploaded_count = len(st.session_state.source_names)
-        st.session_state.messages = []
-        st.rerun()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  RESOLVE ACTIVE VECTOR STORE
-#  Build scoped VS on-the-fly from session state — no cross-session caching.
-# ══════════════════════════════════════════════════════════════════════════════
-sel       = st.session_state.selected_docs
-all_names = st.session_state.source_names
-
-if sel and set(sel) == set(all_names):
-    # All docs selected — use the pre-built full vector store
-    active_vs    = st.session_state.vector_store
-    active_names = all_names
-elif sel:
-    # Subset selected — build a scoped store from session chunks only
-    active_vs    = build_scoped_vs(sel, st.session_state.doc_chunks)
-    active_names = sel
-else:
-    active_vs    = None
-    active_names = []
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 #  TOPBAR
 # ══════════════════════════════════════════════════════════════════════════════
 n_docs = len(st.session_state.source_names)
-if sel:
+if _sel:
     scope_html = (
-        f'<span class="scope-pill">🎯 {len(sel)} of {n_docs} '
+        f'<span class="scope-pill">🎯 {len(_sel)} of {n_docs} '
         f'doc{"s" if n_docs!=1 else ""} active</span>'
     )
 else:
@@ -726,17 +739,17 @@ st.markdown(f"""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  ONBOARDING
+#  ONBOARDING — shown only when this session has no documents at all
 # ══════════════════════════════════════════════════════════════════════════════
-if not st.session_state.vector_store:
+if not st.session_state.source_names:
     st.markdown("""
     <div class="ob-card">
       <div class="ob-title">👋 Welcome to CopilotAI</div>
-      <p class="ob-sub">Upload company PDFs in the sidebar to get started.</p>
+      <p class="ob-sub">Upload company PDFs using the uploader in the sidebar to get started.</p>
       <p class="ob-sub">Every answer is grounded exclusively in your documents —<br>no hallucinations, no guessing.</p>
       <br>
       <p class="ob-sub">📎 <strong>Tip:</strong> Upload multiple PDFs at once.</p>
-      <p class="ob-sub">🔒 <strong>Private by default</strong> — documents exist only for your current session.</p>
+      <p class="ob-sub">🔒 <strong>Private by default</strong> — your documents are visible only to you and exist only for your current browser session. No other user can see them.</p>
     </div>
     <div class="ob-tiles">
       <div class="ob-tile"><div class="ob-tile-icon">🔍</div><div class="ob-tile-title">Ask questions</div><div class="ob-tile-desc">Instant grounded answers from your documents</div></div>
@@ -746,17 +759,18 @@ if not st.session_state.vector_store:
     """, unsafe_allow_html=True)
     st.stop()
 
-if not sel:
+# ── Documents uploaded but none selected ────────────────────────────────────
+if not _sel:
     st.info("⚠️ No documents selected. Use the sidebar checkboxes to choose which documents to query.")
     st.stop()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CONVERSATION
+#  CONVERSATION HISTORY
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.messages:
     today     = datetime.datetime.now().strftime("%b %d")
-    scope_ctx = f"{len(sel)} doc{'s' if len(sel)!=1 else ''} in scope"
+    scope_ctx = f"{len(_sel)} doc{'s' if len(_sel)!=1 else ''} in scope"
     st.markdown(f"""
     <div class="chat-pad">
     <div class="date-sep">
@@ -766,8 +780,8 @@ if st.session_state.messages:
     </div>""", unsafe_allow_html=True)
 
     for i, msg in enumerate(st.session_state.messages):
-        content      = msg["content"].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-        content_html = content.replace("\n\n","</p><p>").replace("\n","<br>")
+        content      = msg["content"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        content_html = content.replace("\n\n", "</p><p>").replace("\n", "<br>")
 
         if msg["role"] == "user":
             st.markdown(
@@ -787,7 +801,6 @@ if st.session_state.messages:
                 f'style="width:{conf}%;background:{cc}"></div></div>'
                 f'<span class="conf-text">{conf}% conf.</span></div>'
             )
-
             st.markdown(f"""
             <div class="msg-a">
               <div class="a-row">
@@ -821,9 +834,9 @@ if st.session_state.messages:
 # ══════════════════════════════════════════════════════════════════════════════
 #  CHAT INPUT
 # ══════════════════════════════════════════════════════════════════════════════
-sel_str = ", ".join(truncate(d, 18) for d in sel[:3])
-if len(sel) > 3:
-    sel_str += f" +{len(sel)-3} more"
+sel_str = ", ".join(truncate(d, 18) for d in _sel[:3])
+if len(_sel) > 3:
+    sel_str += f" +{len(_sel)-3} more"
 
 st.markdown(
     f'<div class="input-hint">Searching: {sel_str}</div>',
@@ -855,16 +868,12 @@ if query:
         ])
 
         if is_multi_doc_query and len(active_names) > 1:
-            ctx_docs, srcs = retrieve_per_document(
-                active_vs, ref, chunks_per_doc=4
-            )
+            ctx_docs, srcs = retrieve_per_document(active_vs, ref, chunks_per_doc=4)
             answer = generate_answer(ctx_docs, ref, hist)
             conf   = 100
 
         elif is_broad_query:
-            ctx_docs, srcs = retrieve_per_document(
-                active_vs, ref, chunks_per_doc=4
-            )
+            ctx_docs, srcs = retrieve_per_document(active_vs, ref, chunks_per_doc=4)
             answer = generate_answer(ctx_docs, ref, hist)
             conf   = min(len(ctx_docs) * 10, 100)
 
