@@ -7,9 +7,15 @@ Performance fixes applied:
 2. rebuild_vs() wrapped in @st.cache_resource — vector store rebuilt only when doc set changes
 3. build_scoped_vs() wrapped in @st.cache_resource — scoped VS cached per selection tuple
 4. Google Fonts @import uses &display=swap — text paints immediately with fallback font
+
+Privacy fix:
+5. Removed ALL disk persistence (doc_chunks.pkl, faiss_index) — documents now live in
+   session state only. Previously, save_doc_chunks() wrote to a single shared file on the
+   server, so every new visitor auto-loaded every other user's uploaded documents.
+   Now each user gets a completely isolated, private session.
 """
 
-import datetime, glob, os, pickle, shutil, uuid, hashlib, json
+import datetime, glob, os, shutil, uuid, hashlib, json
 import streamlit as st
 
 from rag_pipeline import (
@@ -21,9 +27,6 @@ from rag_pipeline import (
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  FIX #1: Startup cleanup — runs ONCE per server session, not on every rerun
-#  Previously: glob.glob("*.pdf") ran at the top of app.py, meaning it scanned
-#  the filesystem on every single Streamlit rerun (button click, chat message,
-#  checkbox toggle, etc). Now wrapped in @st.cache_resource so it runs once.
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_resource(show_spinner=False)
@@ -45,13 +48,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  FIX #4: Added &display=swap to Google Fonts @import URL
-#  Previously: missing display=swap caused the browser to block text rendering
-#  until the font fully downloaded (~0.5–1s visible blank text on every load).
-#  Now: browser shows fallback font immediately, swaps in custom font when ready.
-# ══════════════════════════════════════════════════════════════════════════════
 
 st.markdown("""
 <style>
@@ -444,63 +440,40 @@ for k, v in {
     if k not in st.session_state:
         st.session_state[k] = v
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 #  HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
-def save_doc_chunks(dc):
-    with open("doc_chunks.pkl", "wb") as f:
-        pickle.dump(dc, f)
 
-def load_doc_chunks():
-    if os.path.exists("doc_chunks.pkl"):
-        with open("doc_chunks.pkl", "rb") as f:
-            return pickle.load(f)
-    return {}
+# PRIVACY FIX: save_doc_chunks and load_doc_chunks have been removed entirely.
+# They wrote/read a shared doc_chunks.pkl file on the server, causing all users
+# to see each other's uploaded documents. All document state now lives in
+# st.session_state only, which is isolated per browser session.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  FIX #2: Cache the vector store rebuild
-#  Previously: rebuild_vs(dc) was called on every rerun that touched doc state,
-#  re-encoding all chunks from scratch each time (1–3 seconds per call).
-#  Now: @st.cache_resource keyed to a hash of the doc names — Streamlit skips
-#  the rebuild entirely if the document set hasn't changed.
+#  Keyed to a hash of doc names so it only rebuilds when documents change.
+#  PRIVACY FIX: removed vs.save_local() — no longer writes shared faiss_index.
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_resource(show_spinner=False)
 def rebuild_vs(_doc_chunks_hash: str, dc: dict):
-    """
-    _doc_chunks_hash is a stable string key so Streamlit knows when to
-    invalidate the cache. The leading underscore tells Streamlit not to
-    try hashing the `dc` dict argument itself (dicts aren't hashable).
-    """
     chunks = [c for cs in dc.values() for c in cs]
     if not chunks:
         return None
-    vs = create_vector_store(chunks)
-    vs.save_local("faiss_index")
-    return vs
+    return create_vector_store(chunks)   # no save_local — stays in memory only
 
 
 def _chunks_hash(dc: dict) -> str:
-    """Stable hash of doc names — changes only when documents are added/removed."""
     return hashlib.md5(json.dumps(sorted(dc.keys())).encode()).hexdigest()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  FIX #3: Cache the scoped vector store
-#  Previously: build_scoped_vs(sel, doc_chunks) ran on every rerun whenever a
-#  subset of docs was selected, re-encoding those chunks each time.
-#  Now: cached per frozen tuple of selected doc names — rebuilt only when the
-#  user actually changes their document selection.
+#  FIX #3: Cache the scoped vector store per selected-doc tuple
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_resource(show_spinner=False)
 def build_scoped_vs(selected_tuple: tuple, _doc_chunks: dict):
-    """
-    selected_tuple must be a tuple (not list) so Streamlit can hash it as a
-    cache key. _doc_chunks uses leading underscore to skip Streamlit hashing.
-    """
     chunks = [c for name in selected_tuple for c in _doc_chunks.get(name, [])]
     if not chunks:
         return None
@@ -529,17 +502,10 @@ def truncate(s, n=22):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  AUTO-LOAD
+#  NO AUTO-LOAD — documents live in session state only (privacy fix)
+#  The previous auto-load block read doc_chunks.pkl here and populated every
+#  new visitor's session with all previously uploaded documents. Removed.
 # ══════════════════════════════════════════════════════════════════════════════
-if st.session_state.vector_store is None:
-    saved = load_doc_chunks()
-    if saved:
-        st.session_state.doc_chunks      = saved
-        st.session_state.source_names    = list(saved.keys())
-        st.session_state.vector_store    = rebuild_vs(_chunks_hash(saved), saved)
-        st.session_state.uploaded_count  = "saved"
-        if not st.session_state.selected_docs:
-            st.session_state.selected_docs = list(saved.keys())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -658,12 +624,9 @@ with st.sidebar:
                     if st.session_state.doc_chunks:
                         dc = st.session_state.doc_chunks
                         st.session_state.vector_store = rebuild_vs(_chunks_hash(dc), dc)
-                        save_doc_chunks(dc)
+                        # PRIVACY FIX: save_doc_chunks(dc) removed — no shared disk writes
                     else:
                         st.session_state.vector_store = None
-                        for p in ("faiss_index", "doc_chunks.pkl"):
-                            if os.path.isdir(p): shutil.rmtree(p)
-                            elif os.path.isfile(p): os.remove(p)
                     st.rerun()
             st.divider()
             if st.button("🗑️ Clear All Documents"):
@@ -671,9 +634,6 @@ with st.sidebar:
                     "vector_store": None, "doc_chunks": {}, "source_names": [],
                     "messages": [], "uploaded_count": 0, "selected_docs": [],
                 })
-                for p in ("faiss_index", "doc_chunks.pkl"):
-                    if os.path.isdir(p): shutil.rmtree(p)
-                    elif os.path.isfile(p): os.remove(p)
                 st.rerun()
 
     if st.session_state.messages:
@@ -711,7 +671,7 @@ if uploaded_files:
     if st.session_state.doc_chunks:
         dc = st.session_state.doc_chunks
         st.session_state.vector_store   = rebuild_vs(_chunks_hash(dc), dc)
-        save_doc_chunks(dc)
+        # PRIVACY FIX: save_doc_chunks(dc) removed — no shared disk writes
         st.session_state.uploaded_count = len(st.session_state.source_names)
         st.session_state.messages = []
         st.rerun()
@@ -727,7 +687,6 @@ if sel and set(sel) == set(all_names):
     active_vs    = st.session_state.vector_store
     active_names = all_names
 elif sel:
-    # FIX #3: pass a sorted tuple (hashable) so @st.cache_resource works correctly
     active_vs    = build_scoped_vs(tuple(sorted(sel)), st.session_state.doc_chunks)
     active_names = sel
 else:
@@ -769,7 +728,7 @@ if not st.session_state.vector_store:
       <p class="ob-sub">Every answer is grounded exclusively in your documents —<br>no hallucinations, no guessing.</p>
       <br>
       <p class="ob-sub">📎 <strong>Tip:</strong> Upload multiple PDFs at once.</p>
-      <p class="ob-sub">🔒 <strong>Private by default</strong> — stored only on your machine.</p>
+      <p class="ob-sub">🔒 <strong>Private by default</strong> — documents exist only for your current session.</p>
     </div>
     <div class="ob-tiles">
       <div class="ob-tile"><div class="ob-tile-icon">🔍</div><div class="ob-tile-title">Ask questions</div><div class="ob-tile-desc">Instant grounded answers from your documents</div></div>
